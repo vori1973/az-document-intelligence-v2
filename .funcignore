@@ -1,0 +1,12 @@
+.git
+.vscode
+.venv
+__pycache__
+.python_packages
+tests/
+openspec/
+infra/
+*.md
+.gitignore
+local.settings.json
+.pytest_cache/

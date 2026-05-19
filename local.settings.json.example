@@ -1,0 +1,34 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "TASK_HUB_NAME": "docpipeline",
+
+    "STORAGE_ACCOUNT_URL": "https://<storage-account>.blob.core.windows.net",
+    "DOCUMENTS_CONTAINER": "documents",
+    "PROCESSING_CONTAINER": "processing",
+
+    "ADI_ENDPOINT": "https://<adi-resource>.cognitiveservices.azure.com/",
+    "ADI_MODEL": "prebuilt-layout",
+    "ADI_FETCH_FIGURES": "false",
+
+    "FOUNDRY_ENDPOINT": "https://<foundry-resource>.services.ai.azure.com",
+    "FOUNDRY_OCR_DEPLOYMENT": "mistral-ocr",
+    "FOUNDRY_KEY_SECRET_NAME": "foundry-key",
+
+    "KEY_VAULT_URL": "https://<keyvault>.vault.azure.net/",
+
+    "AOAI_ENDPOINT": "https://<openai-resource>.openai.azure.com/",
+    "AOAI_EMBEDDING_DEPLOYMENT": "text-embedding-ada-002",
+
+    "AZURE_SEARCH_ENDPOINT": "https://<search-resource>.search.windows.net",
+    "AZURE_SEARCH_INDEX": "document-chunks",
+
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=<key>;IngestionEndpoint=...",
+
+    "OCR_FIGURE_ROUTING": "true",
+    "OCR_MAX_CONCURRENT_PAGES": "5",
+    "PIPELINE_VERSION": "v2.0"
+  }
+}
