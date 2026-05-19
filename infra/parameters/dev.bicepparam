@@ -10,7 +10,10 @@ param location = 'eastus2'
 // and deploying the Mistral OCR model (see scripts/deploy.sh step 1)
 param foundryEndpoint = 'https://<foundry-resource>.services.ai.azure.com'
 
-// Optional overrides (defaults are fine for dev)
+// Disable OCR until Foundry/Mistral subscription is resolved
+param ocrEnabled = 'false'
+
+// Optional overrides
 // param foundryOcrDeployment = 'mistral-ocr'
 // param searchIndex = 'document-chunks-dev'
 // param openaiEmbeddingCapacity = 60

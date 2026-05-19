@@ -18,6 +18,9 @@ param searchIndex string = 'document-chunks'
 @description('Azure OpenAI embedding deployment capacity (TPM / 1000)')
 param openaiEmbeddingCapacity int = 120
 
+@description('Set to false to disable Mistral OCR — ADI handles all pages')
+param ocrEnabled string = 'true'
+
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
 var functionAppName    = '${baseName}-func'
@@ -61,6 +64,7 @@ module functions './modules/functions.bicep' = {
     aoaiEmbeddingDeployment: 'text-embedding-ada-002'
     searchEndpoint: 'https://${searchServiceName}.search.windows.net'
     searchIndex: searchIndex
+    ocrEnabled: ocrEnabled
   }
 }
 

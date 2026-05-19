@@ -43,6 +43,9 @@ param searchEndpoint string
 @description('Azure AI Search index name')
 param searchIndex string
 
+@description('Set to false to disable Mistral OCR — ADI handles all pages (use when Foundry subscription unavailable)')
+param ocrEnabled string = 'true'
+
 resource plan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: planName
   location: location
@@ -84,6 +87,7 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
         { name: 'AOAI_EMBEDDING_DEPLOYMENT', value: aoaiEmbeddingDeployment }
         { name: 'AZURE_SEARCH_ENDPOINT', value: searchEndpoint }
         { name: 'AZURE_SEARCH_INDEX', value: searchIndex }
+        { name: 'OCR_ENABLED', value: ocrEnabled }
         { name: 'OCR_FIGURE_ROUTING', value: 'true' }
         { name: 'OCR_MAX_CONCURRENT_PAGES', value: '5' }
         { name: 'PIPELINE_VERSION', value: 'v2.0' }

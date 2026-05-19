@@ -27,6 +27,7 @@
 
     "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=<key>;IngestionEndpoint=...",
 
+    "OCR_ENABLED": "false",
     "OCR_FIGURE_ROUTING": "true",
     "OCR_MAX_CONCURRENT_PAGES": "5",
     "PIPELINE_VERSION": "v2.0"

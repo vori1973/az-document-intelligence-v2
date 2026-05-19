@@ -53,22 +53,36 @@ def step3_router_main(ctx: dict) -> dict:
         raw = download_json_artifact(doc_id, run_id, "adi-results.json")
         adi_results = [AdiPageResult.model_validate(r) for r in raw]
 
+        # OCR_ENABLED=false → skip Mistral entirely, use ADI for all pages.
+        # Set this when Mistral/Foundry subscription is unavailable.
+        # Re-enable once the subscription issue is resolved.
+        ocr_enabled = os.environ.get("OCR_ENABLED", "true").lower() != "false"
         ocr_figure_routing = os.environ.get("OCR_FIGURE_ROUTING", "true").lower() != "false"
 
         pages_for_ocr: list[int] = []
         adi_only_pages: list[int] = []
         low_conf_tables: list[TableConfidence] = []
 
-        for page in adi_results:
-            has_low_conf = any(t.requires_ocr for t in page.tables)
-            has_figure_overlap = ocr_figure_routing and any(
-                _figure_overlaps_table(f, page.tables) for f in page.figures
+        if not ocr_enabled:
+            # ADI-only mode: all pages go through ADI, no Mistral calls
+            adi_only_pages = [p.page_number for p in adi_results]
+            low_conf_tables = [t for p in adi_results for t in p.tables if t.requires_ocr]
+            logger.warning(
+                "[step3] OCR_ENABLED=false — skipping Mistral for all %d page(s). "
+                "%d table(s) would normally require OCR.",
+                len(adi_results), len(low_conf_tables),
             )
-            if has_low_conf or has_figure_overlap:
-                pages_for_ocr.append(page.page_number)
-            else:
-                adi_only_pages.append(page.page_number)
-            low_conf_tables.extend(t for t in page.tables if t.requires_ocr)
+        else:
+            for page in adi_results:
+                has_low_conf = any(t.requires_ocr for t in page.tables)
+                has_figure_overlap = ocr_figure_routing and any(
+                    _figure_overlaps_table(f, page.tables) for f in page.figures
+                )
+                if has_low_conf or has_figure_overlap:
+                    pages_for_ocr.append(page.page_number)
+                else:
+                    adi_only_pages.append(page.page_number)
+                low_conf_tables.extend(t for t in page.tables if t.requires_ocr)
 
         decision = RoutingDecision(
             doc_id=doc_id,
@@ -81,7 +95,7 @@ def step3_router_main(ctx: dict) -> dict:
         upload_json_artifact(doc_id, run_id, "routing.json", decision.model_dump())
 
         logger.info(
-            "[step3] doc_id=%s adi_only=%s ocr_pages=%s low_conf_tables=%d",
-            doc_id, adi_only_pages, pages_for_ocr, len(low_conf_tables),
+            "[step3] doc_id=%s ocr_enabled=%s adi_only=%s ocr_pages=%s low_conf_tables=%d",
+            doc_id, ocr_enabled, adi_only_pages, pages_for_ocr, len(low_conf_tables),
         )
         return decision.model_dump()

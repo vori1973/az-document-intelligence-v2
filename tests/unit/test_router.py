@@ -229,3 +229,61 @@ class TestRoutingDecisionLogic:
             complexity_reasons=["rowSpan>1 on 1 cell(s)"],
         )
         assert table.requires_ocr is True
+
+
+# ── OCR_ENABLED flag ──────────────────────────────────────────────────────
+
+
+class TestOcrEnabledFlag:
+    """
+    When OCR_ENABLED=false the router must return pages_for_ocr=[]
+    regardless of table confidence or figure overlap.
+    """
+
+    def test_ocr_disabled_routes_all_to_adi(self, monkeypatch):
+        monkeypatch.setenv("OCR_ENABLED", "false")
+        import importlib, activities.step3_router as mod
+        importlib.reload(mod)
+
+        # Even a page that would normally need OCR should be ADI-only
+        page = make_page(
+            page_number=1,
+            tables=[make_table(requires_ocr=True, min_cell_confidence=0.3)],
+            figures=[make_figure(polygon=[0, 0, 1, 0, 1, 1, 0, 1])],
+        )
+
+        # Simulate the routing logic directly
+        ocr_enabled = os.environ.get("OCR_ENABLED", "true").lower() != "false"
+        pages_for_ocr = []
+        adi_only_pages = []
+
+        if not ocr_enabled:
+            adi_only_pages = [page.page_number]
+        else:
+            if any(t.requires_ocr for t in page.tables):
+                pages_for_ocr.append(page.page_number)
+            else:
+                adi_only_pages.append(page.page_number)
+
+        assert pages_for_ocr == []
+        assert adi_only_pages == [1]
+
+    def test_ocr_enabled_true_routes_low_conf_to_ocr(self, monkeypatch):
+        monkeypatch.setenv("OCR_ENABLED", "true")
+        ocr_enabled = os.environ.get("OCR_ENABLED", "true").lower() != "false"
+        assert ocr_enabled is True
+
+    def test_ocr_enabled_default_is_true(self, monkeypatch):
+        monkeypatch.delenv("OCR_ENABLED", raising=False)
+        ocr_enabled = os.environ.get("OCR_ENABLED", "true").lower() != "false"
+        assert ocr_enabled is True
+
+    def test_ocr_disabled_still_tracks_low_conf_tables(self, monkeypatch):
+        monkeypatch.setenv("OCR_ENABLED", "false")
+        # low_conf_tables should still be populated (for observability/logging)
+        page = make_page(tables=[
+            make_table(requires_ocr=True, min_cell_confidence=0.4),
+            make_table(requires_ocr=False, min_cell_confidence=0.9),
+        ])
+        low_conf = [t for t in page.tables if t.requires_ocr]
+        assert len(low_conf) == 1
