@@ -29,7 +29,7 @@ RETRY_POLICY = df.RetryOptions(
 OCR_BATCH_SIZE = 5  # max concurrent Mistral OCR calls (rate limit guard)
 
 
-def pipeline_orchestrator_generator(context: df.DurableOrchestrationContext):
+def pipeline_orchestrator(context: df.DurableOrchestrationContext):
     ctx: dict = context.get_input()
     doc_id = ctx["doc_id"]
     run_id = ctx["run_id"]
@@ -98,7 +98,7 @@ def pipeline_orchestrator_generator(context: df.DurableOrchestrationContext):
     return {"status": "completed", "doc_id": doc_id, "run_id": run_id}
 
 
-def cleanup_orchestrator_generator(context: df.DurableOrchestrationContext):
+def cleanup_orchestrator(context: df.DurableOrchestrationContext):
     """Standalone orchestrator for stale-chunk cleanup triggered on document update."""
     inp: dict = context.get_input()
     doc_id = inp["doc_id"]
@@ -112,5 +112,3 @@ def cleanup_orchestrator_generator(context: df.DurableOrchestrationContext):
     return {"status": "cleaned", "doc_id": doc_id}
 
 
-pipeline_orchestrator = df.Orchestrator.from_generator(pipeline_orchestrator_generator)
-cleanup_orchestrator = df.Orchestrator.from_generator(cleanup_orchestrator_generator)

@@ -43,6 +43,15 @@ resource processingContainer 'Microsoft.Storage/storageAccounts/blobServices/con
   }
 }
 
+// Required by Flex Consumption for remote build / code deployment
+resource deploymentsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+  parent: blobService
+  name: 'deployments'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 // Storage Blob Data Contributor for Function App MI
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
@@ -71,4 +80,4 @@ resource delegatorRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-0
 
 output storageAccountId string = storage.id
 output storageAccountName string = storage.name
-output storageAccountUrl string = 'https://${storage.name}.blob.core.windows.net'
+output storageAccountUrl string = 'https://${storage.name}.blob.${environment().suffixes.storage}'

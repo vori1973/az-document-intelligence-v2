@@ -38,8 +38,9 @@ echo "  Location:  ${LOCATION}"
 echo "  RG:        ${RESOURCE_GROUP}"
 echo "=============================================="
 
-# ── Step 1: Check Foundry endpoint is set ────────────────────────────────
-if grep -q "<foundry-resource>" "${PARAMS_FILE}"; then
+# ── Step 1: Check Foundry endpoint is set (skip when OCR disabled) ───────
+OCR_ENABLED_PARAM=$(grep "param ocrEnabled" "${PARAMS_FILE}" 2>/dev/null | sed "s/.*= '//;s/'.*//" || echo "true")
+if [[ "${OCR_ENABLED_PARAM}" != "false" ]] && grep -q "<foundry-resource>" "${PARAMS_FILE}"; then
   echo ""
   echo "ERROR: foundryEndpoint still contains placeholder in ${PARAMS_FILE}"
   echo ""
@@ -48,8 +49,12 @@ if grep -q "<foundry-resource>" "${PARAMS_FILE}"; then
   echo "  2. Search 'mistral-ocr' → Deploy → Classic deployment"
   echo "  3. Copy the endpoint URL and update ${PARAMS_FILE}"
   echo "     param foundryEndpoint = 'https://<your-resource>.services.ai.azure.com'"
+  echo "  -- OR -- set param ocrEnabled = 'false' to skip Mistral for now."
   echo ""
   exit 1
+fi
+if [[ "${OCR_ENABLED_PARAM}" == "false" ]]; then
+  echo "  NOTE: ocrEnabled=false — Mistral OCR will be skipped (ADI-only mode)."
 fi
 
 # ── Step 2: Create resource group ────────────────────────────────────────
@@ -64,10 +69,12 @@ echo "      OK"
 # ── Step 3: Deploy Bicep (all resources except Foundry) ──────────────────
 echo ""
 echo "[2/5] Deploying Bicep infrastructure..."
+DEPLOYER_OID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
 DEPLOYMENT_OUTPUT=$(az deployment group create \
   --resource-group "${RESOURCE_GROUP}" \
   --template-file "${REPO_ROOT}/infra/main.bicep" \
   --parameters "${PARAMS_FILE}" \
+  --parameters deployerPrincipalId="${DEPLOYER_OID}" \
   --output json)
 
 echo "      OK"
@@ -89,25 +96,52 @@ echo "  Search       : ${SEARCH_ENDPOINT}"
 echo "  Storage      : ${STORAGE_URL}"
 
 # ── Step 5: Store Foundry key in Key Vault ────────────────────────────────
-echo ""
-echo "[3/5] Storing Foundry key in Key Vault '${KEY_VAULT_NAME}'..."
-echo ""
-echo "  You need to paste the Mistral OCR endpoint key from the Foundry portal."
-echo "  (AI Foundry → your project → Settings → Keys and Endpoint)"
-echo ""
-read -r -s -p "  Foundry API key: " FOUNDRY_KEY
-echo ""
+# Grant the deploying user Key Vault Secrets Officer so they can write secrets
+DEPLOYER_OID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || \
+               az account show --query user.name -o tsv | xargs -I{} az ad user show --id {} --query id -o tsv 2>/dev/null || echo "")
+KV_RESOURCE_ID=$(az keyvault show --name "${KEY_VAULT_NAME}" --resource-group "${RESOURCE_GROUP}" --query id -o tsv)
+if [[ -n "${DEPLOYER_OID}" ]]; then
+  echo ""
+  echo "  Granting Key Vault Secrets Officer to deploying user..."
+  az role assignment create \
+    --role "Key Vault Secrets Officer" \
+    --assignee-object-id "${DEPLOYER_OID}" \
+    --assignee-principal-type User \
+    --scope "${KV_RESOURCE_ID}" \
+    --output none 2>/dev/null || true
+  echo "  Waiting 15s for RBAC propagation..."
+  sleep 15
+fi
 
-if [[ -z "${FOUNDRY_KEY}" ]]; then
-  echo "  WARNING: No key entered — skipping Key Vault secret. Set it manually:"
-  echo "  az keyvault secret set --vault-name ${KEY_VAULT_NAME} --name foundry-key --value <key>"
-else
+echo ""
+if [[ "${OCR_ENABLED_PARAM}" == "false" ]]; then
+  echo "[3/5] Skipping Foundry key (OCR disabled) — storing placeholder..."
   az keyvault secret set \
     --vault-name "${KEY_VAULT_NAME}" \
     --name "foundry-key" \
-    --value "${FOUNDRY_KEY}" \
+    --value "placeholder-ocr-disabled" \
     --output none
-  echo "      OK"
+  echo "      OK (placeholder stored; update when OCR is enabled)"
+else
+  echo "[3/5] Storing Foundry key in Key Vault '${KEY_VAULT_NAME}'..."
+  echo ""
+  echo "  You need to paste the Mistral OCR endpoint key from the Foundry portal."
+  echo "  (AI Foundry → your project → Settings → Keys and Endpoint)"
+  echo ""
+  read -r -s -p "  Foundry API key: " FOUNDRY_KEY
+  echo ""
+
+  if [[ -z "${FOUNDRY_KEY}" ]]; then
+    echo "  WARNING: No key entered — skipping Key Vault secret. Set it manually:"
+    echo "  az keyvault secret set --vault-name ${KEY_VAULT_NAME} --name foundry-key --value <key>"
+  else
+    az keyvault secret set \
+      --vault-name "${KEY_VAULT_NAME}" \
+      --name "foundry-key" \
+      --value "${FOUNDRY_KEY}" \
+      --output none
+    echo "      OK"
+  fi
 fi
 
 # ── Step 6: Deploy Function App code ─────────────────────────────────────
@@ -118,7 +152,59 @@ func azure functionapp publish "${FUNCTION_APP_NAME}" --python
 cd "${REPO_ROOT}"
 echo "      OK"
 
-# ── Step 7: Print summary ─────────────────────────────────────────────────
+# ── Step 7: Wire Event Grid subscriptions (requires functions to exist) ───
+SYSTEM_TOPIC_NAME=$(echo "${DEPLOYMENT_OUTPUT}" | jq -r '.properties.outputs.systemTopicName.value // empty')
+if [[ -z "${SYSTEM_TOPIC_NAME}" ]]; then
+  SYSTEM_TOPIC_NAME="${storageAccountName}-topic"
+fi
+STORAGE_ACCOUNT_NAME=$(echo "${STORAGE_URL}" | sed 's|https://||;s|\.blob.*||')
+SYSTEM_TOPIC_NAME="${STORAGE_ACCOUNT_NAME}-topic"
+
+echo ""
+echo "[5/5] Creating Event Grid subscriptions..."
+
+INGEST_RESOURCE_ID="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Web/sites/${FUNCTION_APP_NAME}/functions/ingest_trigger"
+DELETE_RESOURCE_ID="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Web/sites/${FUNCTION_APP_NAME}/functions/delete_trigger"
+
+az eventgrid system-topic event-subscription create \
+  --name "ingest-pdf" \
+  --resource-group "${RESOURCE_GROUP}" \
+  --system-topic-name "${SYSTEM_TOPIC_NAME}" \
+  --endpoint-type azurefunction \
+  --endpoint "${INGEST_RESOURCE_ID}" \
+  --included-event-types "Microsoft.Storage.BlobCreated" \
+  --advanced-filter subject StringEndsWith ".pdf" \
+  --advanced-filter subject StringBeginsWith "/blobServices/default/containers/documents/" \
+  --max-delivery-attempts 30 \
+  --event-ttl 1440 \
+  --output none 2>/dev/null || \
+az eventgrid system-topic event-subscription update \
+  --name "ingest-pdf" \
+  --resource-group "${RESOURCE_GROUP}" \
+  --system-topic-name "${SYSTEM_TOPIC_NAME}" \
+  --endpoint "${INGEST_RESOURCE_ID}" \
+  --output none
+
+az eventgrid system-topic event-subscription create \
+  --name "delete-pdf" \
+  --resource-group "${RESOURCE_GROUP}" \
+  --system-topic-name "${SYSTEM_TOPIC_NAME}" \
+  --endpoint-type azurefunction \
+  --endpoint "${DELETE_RESOURCE_ID}" \
+  --included-event-types "Microsoft.Storage.BlobDeleted" \
+  --advanced-filter subject StringEndsWith ".pdf" \
+  --advanced-filter subject StringBeginsWith "/blobServices/default/containers/documents/" \
+  --output none 2>/dev/null || \
+az eventgrid system-topic event-subscription update \
+  --name "delete-pdf" \
+  --resource-group "${RESOURCE_GROUP}" \
+  --system-topic-name "${SYSTEM_TOPIC_NAME}" \
+  --endpoint "${DELETE_RESOURCE_ID}" \
+  --output none
+
+echo "      OK"
+
+# ── Step 8: Print summary ─────────────────────────────────────────────────
 echo ""
 echo "=============================================="
 echo "  Deployment complete!"
@@ -135,7 +221,7 @@ echo "    Storage      : ${STORAGE_URL}"
 echo ""
 echo "  Next steps:"
 echo "    - Upload a PDF to the 'documents' container to trigger the pipeline"
-echo "    - Monitor runs: az durable list-instances --app ${FUNCTION_APP_NAME}"
+echo "    - Monitor runs (App Insights): az monitor app-insights query --apps ${FUNCTION_APP_NAME/func/ai} --resource-group ${RESOURCE_GROUP} --analytics-query "traces | where timestamp > ago(30m) | order by timestamp desc | take 50" --output table"
 echo "    - View logs: az monitor app-insights query ..."
 echo ""
 echo "  To run integration tests:"

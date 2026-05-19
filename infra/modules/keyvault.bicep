@@ -7,6 +7,9 @@ param location string = resourceGroup().location
 @description('Function App principal ID for access policy')
 param functionAppPrincipalId string
 
+@description('Principal ID of the deploying user/SP — granted Key Vault Secrets Officer to write secrets during deploy')
+param deployerPrincipalId string = ''
+
 @description('Tenant ID')
 param tenantId string = subscription().tenantId
 
@@ -33,6 +36,19 @@ resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
     principalId: functionAppPrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// Key Vault Secrets Officer — deploying user can write secrets during CI/CD
+var kvSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+
+resource deployerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(deployerPrincipalId)) {
+  name: guid(keyVault.id, deployerPrincipalId, kvSecretsOfficerRoleId)
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsOfficerRoleId)
+    principalId: deployerPrincipalId
+    principalType: 'User'
   }
 }
 

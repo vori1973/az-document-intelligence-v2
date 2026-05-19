@@ -18,8 +18,11 @@ param searchIndex string = 'document-chunks'
 @description('Azure OpenAI embedding deployment capacity (TPM / 1000)')
 param openaiEmbeddingCapacity int = 120
 
+@description('Object ID of the deploying user/SP — granted Key Vault Secrets Officer during deploy')
+param deployerPrincipalId string = ''
+
 @description('Set to false to disable Mistral OCR — ADI handles all pages')
-param ocrEnabled string = 'true'
+param ocrEnabled string = 'false'
 
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
@@ -55,8 +58,8 @@ module functions './modules/functions.bicep' = {
     location: location
     storageAccountName: storageAccountName
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    keyVaultUrl: 'https://${keyVaultName}.vault.azure.net/'
-    storageAccountUrl: 'https://${storageAccountName}.blob.core.windows.net'
+    keyVaultUrl: 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/'
+    storageAccountUrl: 'https://${storageAccountName}.blob.${environment().suffixes.storage}'
     adiEndpoint: 'https://${adiName}.cognitiveservices.azure.com/'
     foundryEndpoint: foundryEndpoint
     foundryOcrDeployment: foundryOcrDeployment
@@ -116,24 +119,23 @@ module keyvault './modules/keyvault.bicep' = {
     keyVaultName: keyVaultName
     location: location
     functionAppPrincipalId: functions.outputs.principalId
+    deployerPrincipalId: deployerPrincipalId
   }
 }
 
 // ── Event Grid ────────────────────────────────────────────────────────────
 module eventgrid './modules/event_grid.bicep' = {
   name: 'eventgrid'
-  dependsOn: [storage, functions]
   params: {
     storageAccountName: storageAccountName
     storageAccountId: storage.outputs.storageAccountId
-    functionAppHostname: functions.outputs.functionAppDefaultHostname
-    functionAppName: functionAppName
     location: location
   }
 }
 
 // ── Outputs ───────────────────────────────────────────────────────────────
 output functionAppName string = functionAppName
+output systemTopicName string = eventgrid.outputs.systemTopicName
 output storageAccountUrl string = storage.outputs.storageAccountUrl
 output adiEndpoint string = adi.outputs.adiEndpoint
 output aoaiEndpoint string = openai.outputs.aoaiEndpoint

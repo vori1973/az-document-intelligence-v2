@@ -56,7 +56,7 @@ resource plan 'Microsoft.Web/serverfarms@2023-01-01' = {
   }
 }
 
-resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
+resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   name: functionAppName
   location: location
   kind: 'functionapp,linux'
@@ -65,12 +65,28 @@ resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   }
   properties: {
     serverFarmId: plan.id
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${storageAccountUrl}/deployments'
+          authentication: {
+            type: 'SystemAssignedIdentity'
+          }
+        }
+      }
+      scaleAndConcurrency: {
+        maximumInstanceCount: 100
+        instanceMemoryMB: 2048
+      }
+      runtime: {
+        name: 'python'
+        version: '3.13'
+      }
+    }
     siteConfig: {
-      pythonVersion: '3.11'
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storageAccountName }
-        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'python' }
-        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
         { name: 'TASK_HUB_NAME', value: 'docpipeline' }
         { name: 'STORAGE_ACCOUNT_URL', value: storageAccountUrl }

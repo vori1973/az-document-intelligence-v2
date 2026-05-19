@@ -36,7 +36,7 @@ resource searchRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
 }
 
 // Search Service Contributor — manage index schema
-var searchServiceContributorRoleId: string = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
+var searchServiceContributorRoleId = '7ca78c08-252a-4471-8644-bb5ff32d4ba0'
 
 resource searchServiceRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(searchService.id, functionAppPrincipalId, searchServiceContributorRoleId)

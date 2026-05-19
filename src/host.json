@@ -16,7 +16,7 @@
     "durableTask": {
       "hubName": "%TASK_HUB_NAME%",
       "storageProvider": {
-        "type": "azure_storage"
+        "type": "AzureStorage"
       },
       "maxConcurrentActivityFunctions": 10,
       "maxConcurrentOrchestratorFunctions": 5

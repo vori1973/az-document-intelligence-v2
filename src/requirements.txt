@@ -1,6 +1,6 @@
 # Azure Functions runtime
-azure-functions==1.21.3
-azure-durable-functions==1.5.3
+azure-functions>=2.0.0
+azure-functions-durable>=1.5.0
 
 # Azure Identity — Entra / DefaultAzureCredential
 azure-identity==1.19.0
@@ -28,7 +28,3 @@ pydantic==2.10.3
 
 # Application Insights telemetry
 opencensus-ext-azure==1.1.13
-
-# Testing
-pytest==8.3.4
-pytest-asyncio==0.24.0

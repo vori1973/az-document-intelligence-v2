@@ -44,12 +44,12 @@ async def delete_trigger(event: func.EventGridEvent) -> None:
 
 @app.orchestration_trigger(context_name="context")
 def pipeline_orchestrator_fn(context: df.DurableOrchestrationContext):
-    return pipeline_orchestrator(context)
+    yield from pipeline_orchestrator(context)
 
 
 @app.orchestration_trigger(context_name="context")
 def cleanup_orchestrator_fn(context: df.DurableOrchestrationContext):
-    return cleanup_orchestrator(context)
+    yield from cleanup_orchestrator(context)
 
 
 # ── Activity Functions ────────────────────────────────────────────────────

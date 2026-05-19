@@ -4,15 +4,11 @@ param storageAccountName string
 @description('Storage account ID')
 param storageAccountId string
 
-@description('Function App default hostname')
-param functionAppHostname string
-
-@description('Function App name')
-param functionAppName string
-
 @description('Location')
 param location string = resourceGroup().location
 
+// System topic only — event subscriptions are created post-deploy (after func publish)
+// because Event Grid validates the function endpoint exists before creating subscriptions.
 resource systemTopic 'Microsoft.EventGrid/systemTopics@2022-06-15' = {
   name: '${storageAccountName}-topic'
   location: location
@@ -22,70 +18,5 @@ resource systemTopic 'Microsoft.EventGrid/systemTopics@2022-06-15' = {
   }
 }
 
-resource ingestSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2022-06-15' = {
-  parent: systemTopic
-  name: 'ingest-pdf'
-  properties: {
-    destination: {
-      endpointType: 'AzureFunction'
-      properties: {
-        resourceId: resourceId('Microsoft.Web/sites/functions', functionAppName, 'ingest_trigger')
-        maxEventsPerBatch: 1
-        preferredBatchSizeInKilobytes: 64
-      }
-    }
-    filter: {
-      includedEventTypes: ['Microsoft.Storage.BlobCreated']
-      advancedFilters: [
-        {
-          operatorType: 'StringEndsWith'
-          key: 'subject'
-          values: ['.pdf']
-        }
-        {
-          operatorType: 'StringBeginsWith'
-          key: 'subject'
-          values: ['/blobServices/default/containers/documents/']
-        }
-      ]
-    }
-    eventDeliverySchema: 'EventGridSchema'
-    retryPolicy: {
-      maxDeliveryAttempts: 30
-      eventTimeToLiveInMinutes: 1440
-    }
-  }
-}
-
-resource deleteSubscription 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2022-06-15' = {
-  parent: systemTopic
-  name: 'delete-pdf'
-  properties: {
-    destination: {
-      endpointType: 'AzureFunction'
-      properties: {
-        resourceId: resourceId('Microsoft.Web/sites/functions', functionAppName, 'delete_trigger')
-        maxEventsPerBatch: 1
-        preferredBatchSizeInKilobytes: 64
-      }
-    }
-    filter: {
-      includedEventTypes: ['Microsoft.Storage.BlobDeleted']
-      advancedFilters: [
-        {
-          operatorType: 'StringEndsWith'
-          key: 'subject'
-          values: ['.pdf']
-        }
-        {
-          operatorType: 'StringBeginsWith'
-          key: 'subject'
-          values: ['/blobServices/default/containers/documents/']
-        }
-      ]
-    }
-    eventDeliverySchema: 'EventGridSchema'
-  }
-}
-
+output systemTopicName string = systemTopic.name
 output systemTopicId string = systemTopic.id
