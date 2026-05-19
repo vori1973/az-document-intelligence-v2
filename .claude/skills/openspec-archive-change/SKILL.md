@@ -82,7 +82,27 @@ Archive a completed change in the experimental workflow.
    mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
    ```
 
-6. **Display summary**
+6. **Close the linked GitHub issue**
+
+   Read the archived `github-issue.md` (now at `openspec/changes/archive/YYYY-MM-DD-<name>/github-issue.md`) and extract the **Title** line (the line starting with `**Title:**`).
+
+   Search for an open GitHub issue whose title matches:
+   ```bash
+   gh issue list --state open --json number,title
+   ```
+
+   If a matching issue is found:
+   - Close it with a comment referencing the archive location:
+     ```bash
+     gh issue close <number> --comment "Implemented and archived in \`openspec/changes/archive/YYYY-MM-DD-<name>/\`. All tasks complete — see tasks.md for details."
+     ```
+   - Record the issue number for the summary.
+
+   **If no `github-issue.md` exists** or no matching open issue is found: skip silently and note it in the summary.
+
+   **Do not fail** the archive if the GitHub step fails — log a warning and continue.
+
+7. **Display summary**
 
    Show archive completion summary including:
    - Change name
@@ -100,6 +120,7 @@ Archive a completed change in the experimental workflow.
 **Schema:** <schema-name>
 **Archived to:** openspec/changes/archive/YYYY-MM-DD-<name>/
 **Specs:** ✓ Synced to main specs (or "No delta specs" or "Sync skipped")
+**GitHub issue:** ✓ Closed #<number> — <issue-title>
 
 All artifacts complete. All tasks complete.
 ```
@@ -112,3 +133,4 @@ All artifacts complete. All tasks complete.
 - Show clear summary of what happened
 - If sync is requested, use openspec-sync-specs approach (agent-driven)
 - If delta specs exist, always run the sync assessment and show the combined summary before prompting
+- Never fail the archive if the GitHub issue close step fails — warn and continue
