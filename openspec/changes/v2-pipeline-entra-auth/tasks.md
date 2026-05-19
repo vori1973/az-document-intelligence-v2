@@ -47,8 +47,8 @@
 - [x] 7.1 function_app.py — register all functions
 
 ## Phase 8 — Testing
-- [ ] 8.1 Unit tests for router logic
-- [ ] 8.2 Unit tests for chunk building
+- [x] 8.1 Unit tests for router logic
+- [x] 8.2 Unit tests for chunk building
 - [ ] 8.3 Integration test: upload → verify chunks in Search
 - [ ] 8.4 Integration test: delete → verify chunks removed
 
