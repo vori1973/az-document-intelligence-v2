@@ -6,20 +6,17 @@ param baseName string
 @description('Location')
 param location string = resourceGroup().location
 
-@description('ADI endpoint')
-param adiEndpoint string
-
-@description('Azure AI Foundry endpoint')
+@description('Azure AI Foundry endpoint (created manually — Mistral requires marketplace terms)')
 param foundryEndpoint string
 
 @description('Foundry OCR deployment name')
-param foundryOcrDeployment string
-
-@description('Azure OpenAI endpoint')
-param aoaiEndpoint string
+param foundryOcrDeployment string = 'mistral-ocr'
 
 @description('Azure AI Search index name')
 param searchIndex string = 'document-chunks'
+
+@description('Azure OpenAI embedding deployment capacity (TPM / 1000)')
+param openaiEmbeddingCapacity int = 120
 
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
@@ -29,6 +26,8 @@ var searchServiceName  = '${baseName}-search'
 var keyVaultName       = '${take(baseName, 20)}-kv'
 var workspaceName      = '${baseName}-logs'
 var appInsightsName    = '${baseName}-ai'
+var adiName            = '${baseName}-adi'
+var openaiName         = '${baseName}-oai'
 
 // ── Monitoring (deployed first — other modules need connection string) ────
 module monitoring './modules/monitoring.bicep' = {
@@ -40,7 +39,11 @@ module monitoring './modules/monitoring.bicep' = {
   }
 }
 
-// ── Function App (deploy before storage/search so we get the principalId) ─
+// ── ADI (provisioned by Bicep, Entra auth via RBAC) ──────────────────────
+// RBAC assigned after Function App MI is known — deploy functions first
+// (ADI module depends on principalId so it comes after the functions module)
+
+// ── Function App (deploy before RBAC modules so we get principalId) ───────
 module functions './modules/functions.bicep' = {
   name: 'functions'
   params: {
@@ -51,12 +54,34 @@ module functions './modules/functions.bicep' = {
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     keyVaultUrl: 'https://${keyVaultName}.vault.azure.net/'
     storageAccountUrl: 'https://${storageAccountName}.blob.core.windows.net'
-    adiEndpoint: adiEndpoint
+    adiEndpoint: 'https://${adiName}.cognitiveservices.azure.com/'
     foundryEndpoint: foundryEndpoint
     foundryOcrDeployment: foundryOcrDeployment
-    aoaiEndpoint: aoaiEndpoint
+    aoaiEndpoint: 'https://${openaiName}.openai.azure.com/'
+    aoaiEmbeddingDeployment: 'text-embedding-ada-002'
     searchEndpoint: 'https://${searchServiceName}.search.windows.net'
     searchIndex: searchIndex
+  }
+}
+
+// ── Azure Document Intelligence ───────────────────────────────────────────
+module adi './modules/adi.bicep' = {
+  name: 'adi'
+  params: {
+    adiName: adiName
+    location: location
+    functionAppPrincipalId: functions.outputs.principalId
+  }
+}
+
+// ── Azure OpenAI ──────────────────────────────────────────────────────────
+module openai './modules/openai.bicep' = {
+  name: 'openai'
+  params: {
+    openaiName: openaiName
+    location: location
+    functionAppPrincipalId: functions.outputs.principalId
+    embeddingCapacity: openaiEmbeddingCapacity
   }
 }
 
@@ -106,6 +131,9 @@ module eventgrid './modules/event_grid.bicep' = {
 // ── Outputs ───────────────────────────────────────────────────────────────
 output functionAppName string = functionAppName
 output storageAccountUrl string = storage.outputs.storageAccountUrl
+output adiEndpoint string = adi.outputs.adiEndpoint
+output aoaiEndpoint string = openai.outputs.aoaiEndpoint
 output searchEndpoint string = search.outputs.searchEndpoint
 output keyVaultUrl string = keyvault.outputs.keyVaultUrl
+output keyVaultName string = keyVaultName
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
