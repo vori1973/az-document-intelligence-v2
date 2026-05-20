@@ -10,26 +10,13 @@ All helpers emit both a structured log record (JSON) and an App Insights custom 
 from __future__ import annotations
 
 import logging
-import os
 import time
 from contextlib import contextmanager
 from typing import Any
 
+# The Azure Functions host routes all logging output to App Insights automatically
+# when APPLICATIONINSIGHTS_CONNECTION_STRING is set — no extra handler needed.
 logger = logging.getLogger("pipeline")
-
-_ai_enabled = bool(os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"))
-
-if _ai_enabled:
-    try:
-        from opencensus.ext.azure.log_exporter import AzureLogHandler
-
-        _handler = AzureLogHandler(
-            connection_string=os.environ["APPLICATIONINSIGHTS_CONNECTION_STRING"]
-        )
-        logger.addHandler(_handler)
-    except Exception:
-        _ai_enabled = False
-
 logger.setLevel(logging.INFO)
 
 

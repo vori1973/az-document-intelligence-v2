@@ -131,6 +131,8 @@ All resources are created inside `docintv2-dev-rg`. All service-to-service authe
 |---------|------|-----|
 | Storage | Blob Data Contributor | Read uploaded PDFs, write/read processing artifacts |
 | Storage | Blob Delegator | Generate user-delegation SAS URLs for Mistral OCR page images |
+| Storage | Table Data Contributor | Durable Functions task hub — orchestration state |
+| Storage | Queue Data Contributor | Durable Functions task hub — work item queues |
 | Document Intelligence | Cognitive Services User | Call the ADI analysis API |
 | Azure OpenAI | Cognitive Services OpenAI User | Call the embedding model |
 | AI Search | Search Index Data Contributor | Read and write index documents |

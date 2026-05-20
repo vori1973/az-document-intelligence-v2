@@ -45,11 +45,26 @@ module monitoring './modules/monitoring.bicep' = {
   }
 }
 
-// ── ADI (provisioned by Bicep, Entra auth via RBAC) ──────────────────────
-// RBAC assigned after Function App MI is known — deploy functions first
-// (ADI module depends on principalId so it comes after the functions module)
+// ── Azure Document Intelligence (deploy before functions to get real endpoint) ──
+module adi './modules/adi.bicep' = {
+  name: 'adi'
+  params: {
+    adiName: adiName
+    location: location
+  }
+}
 
-// ── Function App (deploy before RBAC modules so we get principalId) ───────
+// ── Azure OpenAI (deploy before functions to get real endpoint) ───────────
+module openai './modules/openai.bicep' = {
+  name: 'openai'
+  params: {
+    openaiName: openaiName
+    location: location
+    embeddingCapacity: openaiEmbeddingCapacity
+  }
+}
+
+// ── Function App (after adi/openai so we can use their real endpoints) ────
 module functions './modules/functions.bicep' = {
   name: 'functions'
   params: {
@@ -60,10 +75,10 @@ module functions './modules/functions.bicep' = {
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     keyVaultUrl: 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/'
     storageAccountUrl: 'https://${storageAccountName}.blob.${environment().suffixes.storage}'
-    adiEndpoint: 'https://${adiName}.cognitiveservices.azure.com/'
+    adiEndpoint: adi.outputs.adiEndpoint
     foundryEndpoint: foundryEndpoint
     foundryOcrDeployment: foundryOcrDeployment
-    aoaiEndpoint: 'https://${openaiName}.openai.azure.com/'
+    aoaiEndpoint: openai.outputs.aoaiEndpoint
     aoaiEmbeddingDeployment: 'text-embedding-ada-002'
     searchEndpoint: 'https://${searchServiceName}.search.windows.net'
     searchIndex: searchIndex
@@ -71,24 +86,21 @@ module functions './modules/functions.bicep' = {
   }
 }
 
-// ── Azure Document Intelligence ───────────────────────────────────────────
-module adi './modules/adi.bicep' = {
-  name: 'adi'
+// ── ADI RBAC (after functions so we have principalId) ─────────────────────
+module adiRbac './modules/adi_rbac.bicep' = {
+  name: 'adiRbac'
   params: {
     adiName: adiName
-    location: location
     functionAppPrincipalId: functions.outputs.principalId
   }
 }
 
-// ── Azure OpenAI ──────────────────────────────────────────────────────────
-module openai './modules/openai.bicep' = {
-  name: 'openai'
+// ── Azure OpenAI RBAC (after functions so we have principalId) ────────────
+module openaiRbac './modules/openai_rbac.bicep' = {
+  name: 'openaiRbac'
   params: {
     openaiName: openaiName
-    location: location
     functionAppPrincipalId: functions.outputs.principalId
-    embeddingCapacity: openaiEmbeddingCapacity
   }
 }
 

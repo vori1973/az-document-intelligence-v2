@@ -26,5 +26,5 @@ PyMuPDF==1.24.14
 # Data models
 pydantic==2.10.3
 
-# Application Insights telemetry
-opencensus-ext-azure==1.1.13
+# App Insights telemetry is handled by the Azure Functions host automatically
+# via APPLICATIONINSIGHTS_CONNECTION_STRING — no extra SDK needed.

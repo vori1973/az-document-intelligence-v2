@@ -28,7 +28,7 @@ from models.types import PipelineContext
 logger = logging.getLogger(__name__)
 
 
-async def ingest_trigger_main(event: func.EventGridEvent, starter: str) -> None:
+async def ingest_trigger_main(event: func.EventGridEvent, starter: df.DurableOrchestrationClient) -> None:
     data = event.get_json()
     blob_url: str = data.get("url", "")
     blob_name: str = data.get("url", "").split("/documents/", 1)[-1]
@@ -55,9 +55,8 @@ async def ingest_trigger_main(event: func.EventGridEvent, starter: str) -> None:
             old_doc_id,
             doc_id,
         )
-        client = df.DurableOrchestrationClient(starter)
-        await client.start_new(
-            "cleanup_orchestrator",
+        await starter.start_new(
+            "cleanup_orchestrator_fn",
             instance_id=f"cleanup-{old_doc_id}",
             client_input={"doc_id": old_doc_id, "blob_name": blob_name},
         )
@@ -73,10 +72,9 @@ async def ingest_trigger_main(event: func.EventGridEvent, starter: str) -> None:
     store_doc_id_mapping(blob_name, doc_id)
     log_step_start("ingest_trigger", doc_id, run_id, blob_name=blob_name)
 
-    client = df.DurableOrchestrationClient(starter)
     instance_id = f"pipeline-{doc_id}-{run_id}"
-    await client.start_new(
-        "pipeline_orchestrator",
+    await starter.start_new(
+        "pipeline_orchestrator_fn",
         instance_id=instance_id,
         client_input=ctx.model_dump(),
     )
