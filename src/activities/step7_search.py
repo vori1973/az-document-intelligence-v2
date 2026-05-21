@@ -92,8 +92,6 @@ def _build_index_schema() -> SearchIndex:
             ScalarQuantizationCompression(
                 compression_name="scalar-quantization",
                 parameters=ScalarQuantizationParameters(quantized_data_type="int8"),
-                rerank_with_original_vectors=True,
-                default_oversampling=4,
             )
         ],
         profiles=[
