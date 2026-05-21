@@ -13,6 +13,7 @@ import logging
 import os
 
 import azure.functions as func
+from azure.core.exceptions import HttpResponseError
 from azure.search.documents import SearchClient
 
 from shared.auth import get_credential
@@ -31,17 +32,27 @@ def _delete_search_chunks(doc_id: str) -> int:
         index_name=SEARCH_INDEX,
         credential=get_credential(),
     )
-    results = client.search(
-        search_text="*",
-        filter=f"document_id eq '{doc_id}'",
-        select=["id"],
-        top=1000,
-    )
-    docs = [{"@search.action": "delete", "id": r["id"]} for r in results]
-    if not docs:
-        return 0
-    client.upload_documents(docs)
-    return len(docs)
+    total = 0
+    while True:
+        try:
+            batch = list(client.search(
+                search_text="*",
+                filter=f"document_id eq '{doc_id}'",
+                select=["id"],
+                top=1000,
+            ))
+        except HttpResponseError as exc:
+            if exc.status_code == 404:
+                # Index doesn't exist yet — nothing to delete
+                break
+            raise
+        if not batch:
+            break
+        client.upload_documents([{"@search.action": "delete", "id": r["id"]} for r in batch])
+        total += len(batch)
+        if len(batch) < 1000:
+            break  # Last page — no more results
+    return total
 
 
 async def delete_trigger_main(event: func.EventGridEvent) -> None:

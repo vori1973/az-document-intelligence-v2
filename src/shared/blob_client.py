@@ -19,6 +19,7 @@ Artifact layout:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -98,6 +99,17 @@ def list_artifacts(doc_id: str, run_id: str) -> list[str]:
 def delete_doc_artifacts(doc_id: str) -> int:
     """Delete all processing artifacts for a document. Returns the number of blobs deleted."""
     client = _get_service_client()
+
+    # Remove the reverse name-index entry so resolve_doc_id won't return stale results
+    try:
+        blob_name = download_artifact(doc_id, "_meta", "blob-name.txt").decode().strip()
+        key = hashlib.sha256(blob_name.encode()).hexdigest()[:32]
+        client.get_blob_client(
+            container=PROCESSING_CONTAINER, blob=f"_name-index/{key}.txt"
+        ).delete_blob()
+    except Exception:
+        pass  # mapping absent (pre-index documents) — safe to ignore
+
     prefix = f"{doc_id}/"
     container = client.get_container_client(PROCESSING_CONTAINER)
     blobs = list(container.list_blobs(name_starts_with=prefix))
@@ -156,22 +168,39 @@ def generate_page_sas_url(doc_id: str, run_id: str, page: int, expiry_hours: int
 # ── doc_id ↔ blob_name mapping ────────────────────────────────────────────
 
 
+def _name_index_path(blob_name: str) -> str:
+    """Stable blob path for the reverse blob_name → doc_id index entry."""
+    key = hashlib.sha256(blob_name.encode()).hexdigest()[:32]
+    return f"_name-index/{key}.txt"
+
+
 def store_doc_id_mapping(blob_name: str, doc_id: str) -> None:
-    """Persist blob_name → doc_id so delete_trigger can resolve the ID."""
+    """Persist blob_name → doc_id so delete_trigger can resolve the ID.
+
+    Two blobs are written:
+      processing/{doc_id}/_meta/blob-name.txt  — forward mapping (human-readable)
+      processing/_name-index/{hash}.txt        — reverse index for O(1) lookup
+    """
     upload_artifact(doc_id, "_meta", "blob-name.txt", blob_name)
+    # Reverse index: overwrite so re-uploads with the same name always point to the latest doc_id
+    client = _get_service_client()
+    index_blob = client.get_blob_client(
+        container=PROCESSING_CONTAINER, blob=_name_index_path(blob_name)
+    )
+    index_blob.upload_blob(doc_id.encode(), overwrite=True)
 
 
 def resolve_doc_id(blob_name: str) -> str | None:
-    """Look up doc_id from a blob_name stored during ingestion."""
+    """Look up doc_id from a blob_name stored during ingestion.
+
+    Reads directly from the reverse name-index — O(1), no container scan.
+    Falls back to None if no mapping exists (document not yet ingested or already cleaned up).
+    """
     client = _get_service_client()
-    container = client.get_container_client(PROCESSING_CONTAINER)
-    for item in container.list_blobs(name_starts_with=""):
-        if item.name.endswith("/_meta/blob-name.txt"):
-            doc_id = item.name.split("/")[0]
-            try:
-                data = download_artifact(doc_id, "_meta", "blob-name.txt")
-                if data.decode().strip() == blob_name:
-                    return doc_id
-            except Exception:
-                continue
-    return None
+    index_blob = client.get_blob_client(
+        container=PROCESSING_CONTAINER, blob=_name_index_path(blob_name)
+    )
+    try:
+        return index_blob.download_blob().readall().decode().strip()
+    except Exception:
+        return None
