@@ -193,9 +193,14 @@ def store_doc_id_mapping(blob_name: str, doc_id: str) -> None:
 def resolve_doc_id(blob_name: str) -> str | None:
     """Look up doc_id from a blob_name stored during ingestion.
 
-    Reads directly from the reverse name-index — O(1), no container scan.
-    Falls back to None if no mapping exists (document not yet ingested or already cleaned up).
+    Fast path: reads the reverse name-index blob directly — O(1).
+    Fallback: scans _meta/blob-name.txt files for documents ingested before
+    the name-index was introduced, then backfills the index so subsequent
+    lookups are fast.
     """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     client = _get_service_client()
     index_blob = client.get_blob_client(
         container=PROCESSING_CONTAINER, blob=_name_index_path(blob_name)
@@ -203,4 +208,25 @@ def resolve_doc_id(blob_name: str) -> str | None:
     try:
         return index_blob.download_blob().readall().decode().strip()
     except Exception:
-        return None
+        pass
+
+    # Fallback scan for legacy documents that predate the name-index
+    _log.warning("[blob_client] Name-index miss for '%s' — scanning for legacy mapping", blob_name)
+    container = client.get_container_client(PROCESSING_CONTAINER)
+    for item in container.list_blobs(name_starts_with=""):
+        if not item.name.endswith("/_meta/blob-name.txt"):
+            continue
+        doc_id = item.name.split("/")[0]
+        try:
+            stored = download_artifact(doc_id, "_meta", "blob-name.txt").decode().strip()
+        except Exception:
+            continue
+        if stored == blob_name:
+            # Backfill the index so future lookups skip the scan
+            try:
+                index_blob.upload_blob(doc_id.encode(), overwrite=True)
+            except Exception:
+                pass
+            return doc_id
+
+    return None
