@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
@@ -37,7 +38,7 @@ from azure.search.documents.indexes.models import (
 )
 
 from shared.auth import get_credential
-from shared.blob_client import download_json_artifact
+from shared.blob_client import download_json_artifact, upload_json_artifact
 from shared.telemetry import timed_step, track_metric
 from models.types import RagChunk
 
@@ -122,15 +123,18 @@ def _build_index_schema() -> SearchIndex:
     )
 
 
-def _ensure_index(index_client: SearchIndexClient) -> None:
+def _ensure_index(index_client: SearchIndexClient) -> str:
+    """Create or update the search index. Returns 'created' or 'updated'."""
     schema = _build_index_schema()
     try:
         index_client.get_index(SEARCH_INDEX)
         logger.info("[step7] Updating existing index '%s'", SEARCH_INDEX)
         index_client.create_or_update_index(schema)
+        return "updated"
     except Exception:
         logger.info("[step7] Creating new index '%s'", SEARCH_INDEX)
         index_client.create_index(schema)
+        return "created"
 
 
 def _chunk_to_doc(chunk: RagChunk) -> dict:
@@ -164,9 +168,10 @@ def step7_search_main(ctx: dict) -> dict:
         if missing:
             raise ValueError(f"{len(missing)} chunks missing embeddings — run step6 first")
 
+        t0 = time.monotonic()
         credential = get_credential()
         index_client = SearchIndexClient(endpoint=SEARCH_ENDPOINT, credential=credential)
-        _ensure_index(index_client)
+        index_action = _ensure_index(index_client)
 
         search_client = SearchClient(
             endpoint=SEARCH_ENDPOINT,
@@ -190,6 +195,12 @@ def step7_search_main(ctx: dict) -> dict:
             total_indexed += succeeded
             logger.info("[step7] Batch %d: %d/%d succeeded", batch_num, succeeded, len(docs))
 
+        duration_ms = (time.monotonic() - t0) * 1000
         track_metric("chunks_indexed", total_indexed, doc_id=doc_id)
         logger.info("[step7] doc_id=%s indexed=%d/%d", doc_id, total_indexed, len(chunks))
+        upload_json_artifact(doc_id, run_id, "step7-result.json", {
+            "indexed": total_indexed,
+            "index_action": index_action,
+            "duration_ms": round(duration_ms),
+        })
         return {"chunks_indexed": total_indexed}

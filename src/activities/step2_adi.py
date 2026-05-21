@@ -263,4 +263,11 @@ def step2_adi_main(ctx: dict) -> dict:
             "[step2] doc_id=%s pages=%d tables=%d figures=%d low_conf=%d %.0fms",
             doc_id, len(pages), len(tables), len(figures_raw), low_conf, duration_ms,
         )
+        upload_json_artifact(doc_id, run_id, "step2-result.json", {
+            "pages": len(pages),
+            "tables": len(tables),
+            "figures": len(figures_raw),
+            "low_conf_pages": low_conf,
+            "duration_ms": round(duration_ms),
+        })
         return {"adi_pages": len(pages), "tables": len(tables)}

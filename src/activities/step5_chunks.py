@@ -612,6 +612,12 @@ def step5_chunks_main(ctx: dict) -> dict:
             "[step5] doc_id=%s table_rows=%d paragraphs=%d figures=%d total=%d",
             doc_id, len(table_chunks), len(para_chunks), len(figure_chunks), len(all_chunks),
         )
+        upload_json_artifact(doc_id, run_id, "step5-result.json", {
+            "paragraphs": len(para_chunks),
+            "table_rows": len(table_chunks),
+            "figures": len(figure_chunks),
+            "total": len(all_chunks),
+        })
         return {"total_chunks": len(all_chunks)}
 
 

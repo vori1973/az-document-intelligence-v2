@@ -66,6 +66,7 @@ def step6_embed_main(ctx: dict) -> dict:
         client = _get_client()
         total_batches = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
         total_tokens = 0
+        t0 = time.monotonic()
 
         for b_start in range(0, len(chunks), BATCH_SIZE):
             batch = chunks[b_start : b_start + BATCH_SIZE]
@@ -78,6 +79,7 @@ def step6_embed_main(ctx: dict) -> dict:
                 chunk.embedding = embedding
             total_tokens += sum(len(t.split()) for t in texts)  # approximate
 
+        duration_ms = (time.monotonic() - t0) * 1000
         upload_json_artifact(doc_id, run_id, "chunks-embedded.json", [c.model_dump() for c in chunks])
 
         track_metric("embedding_tokens_approx", total_tokens, doc_id=doc_id)
@@ -85,4 +87,9 @@ def step6_embed_main(ctx: dict) -> dict:
             "[step6] doc_id=%s chunks=%d batches=%d",
             doc_id, len(chunks), total_batches,
         )
+        upload_json_artifact(doc_id, run_id, "step6-result.json", {
+            "chunks": len(chunks),
+            "batches": total_batches,
+            "duration_ms": round(duration_ms),
+        })
         return {"chunks_embedded": len(chunks)}

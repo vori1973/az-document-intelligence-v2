@@ -98,4 +98,10 @@ def step3_router_main(ctx: dict) -> dict:
             "[step3] doc_id=%s ocr_enabled=%s adi_only=%s ocr_pages=%s low_conf_tables=%d",
             doc_id, ocr_enabled, adi_only_pages, pages_for_ocr, len(low_conf_tables),
         )
+        upload_json_artifact(doc_id, run_id, "step3-result.json", {
+            "adi_only": adi_only_pages,
+            "ocr_pages": pages_for_ocr,
+            "low_conf_tables": len(low_conf_tables),
+            "ocr_enabled": ocr_enabled,
+        })
         return decision.model_dump()
