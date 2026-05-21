@@ -45,12 +45,14 @@ Implement tasks from an OpenSpec change.
    - If `state: "all_done"`: congratulate, suggest archive
    - Otherwise: proceed to implementation
 
-4. **Read context files**
+4. **Read context files and linked issue**
 
    Read every file path listed under `contextFiles` from the apply instructions output.
    The files depend on the schema being used:
    - **spec-driven**: proposal, specs, design, tasks
    - Other schemas: follow the contextFiles from CLI output
+
+   Also check for `openspec/changes/<name>/github-issue.md`. If it exists, extract the issue number. Store it as `$ISSUE_NUMBER` — it will be appended to commit messages during implementation.
 
 5. **Show current progress**
 
@@ -68,6 +70,11 @@ Implement tasks from an OpenSpec change.
    - Keep changes minimal and focused
    - Mark task complete in the tasks file: `- [ ]` → `- [x]`
    - Continue to next task
+
+   **When the user asks to commit** (or when all tasks are done and a commit is natural):
+   - If `$ISSUE_NUMBER` was found in step 4, append `Closes #<issue-number>` to the commit message body
+   - This links the commit to the issue in GitHub and auto-closes it when merged to the default branch
+   - Example commit message footer: `Closes #<issue-number>\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`
 
    **Pause if:**
    - Task is unclear → ask for clarification

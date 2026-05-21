@@ -82,23 +82,23 @@ Archive a completed change in the experimental workflow.
    mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>
    ```
 
-6. **Close the linked GitHub issue**
+6. **Verify (or close) the linked GitHub issue**
 
-   Read the archived `github-issue.md` (now at `openspec/changes/archive/YYYY-MM-DD-<name>/github-issue.md`) and extract the **Title** line (the line starting with `**Title:**`).
+   Read the archived `github-issue.md` (now at `openspec/changes/archive/YYYY-MM-DD-<name>/github-issue.md`) and extract the **Number** line.
 
-   Search for an open GitHub issue whose title matches:
+   If no `github-issue.md` exists: skip and note it in the summary.
+
+   Otherwise, check the current issue state:
    ```bash
-   gh issue list --state open --json number,title
+   gh issue view <number> --json state,title,closedAt
    ```
 
-   If a matching issue is found:
-   - Close it with a comment referencing the archive location:
+   - **If already closed** (auto-closed via `Closes #N` in a commit): report "✓ Already closed by commit" — do nothing further.
+   - **If still open**: close it now with a comment referencing the archive location:
      ```bash
      gh issue close <number> --comment "Implemented and archived in \`openspec/changes/archive/YYYY-MM-DD-<name>/\`. All tasks complete — see tasks.md for details."
      ```
-   - Record the issue number for the summary.
-
-   **If no `github-issue.md` exists** or no matching open issue is found: skip silently and note it in the summary.
+     Note in the summary that it was closed at archive time (not by a commit) — this may mean commits did not include `Closes #<number>`.
 
    **Do not fail** the archive if the GitHub step fails — log a warning and continue.
 
