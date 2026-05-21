@@ -69,6 +69,8 @@ def parse_args() -> argparse.Namespace:
                         help="Write per-request detail (query, scores, result snippets) to a JSONL file alongside the results JSON. Useful for inspecting semantic ranker output.")
     parser.add_argument("--no-perturb", action="store_true",
                         help="Disable vector perturbation. By default a tiny noise (~0.001) is added to each query vector to bust Azure Search's query cache and produce realistic load.")
+    parser.add_argument("--retry-total", type=int, default=3,
+                        help="SDK retry attempts on transient errors (503). Set to 0 to disable retries and surface 503s as real errors in results.")
     return parser.parse_args()
 
 
@@ -177,8 +179,8 @@ async def build_search_request(
     except Exception as exc:
         latency_ms = (time.monotonic() - t0) * 1000
         status = getattr(exc, "status_code", None)
-        if status == 429:
-            return 429, latency_ms, None
+        if status in (429, 503):
+            return status, latency_ms, None
         raise
 
 
@@ -247,6 +249,8 @@ async def run_worker(
         counters["total"] += 1
         if status == 429:
             counters["throttled"] += 1
+        elif status == 503:
+            counters["errors_503"] += 1
 
         if log_state is not None and docs is not None:
             async with log_state["lock"]:
@@ -287,7 +291,9 @@ def aggregate_results(raw: list[tuple[int, float]], duration_s: int) -> dict:
 
     successful = sum(1 for status, _ in raw if status == 200)
     throttled = sum(1 for status, _ in raw if status == 429)
+    errors_503 = sum(1 for status, _ in raw if status == 503)
     throttle_pct = round(throttled / total * 100, 2)
+    error_503_pct = round(errors_503 / total * 100, 2)
     achieved_qps = round(total / duration_s, 2)
 
     latencies = sorted(lat for _, lat in raw)
@@ -300,6 +306,8 @@ def aggregate_results(raw: list[tuple[int, float]], duration_s: int) -> dict:
         "successful": successful,
         "throttled_429": throttled,
         "throttle_pct": throttle_pct,
+        "errors_503": errors_503,
+        "error_503_pct": error_503_pct,
         "p50_ms": p50,
         "p95_ms": p95,
         "p99_ms": p99,
@@ -356,13 +364,14 @@ async def run_load_test(args: argparse.Namespace) -> None:
     if args.log_requests:
         print(f"  Log mode:    per-request JSONL enabled")
     print(f"  Cache-bust:  {'disabled (--no-perturb)' if not perturb else 'ON — tiny noise added to each query vector'}")
+    print(f"  Retries:     {args.retry_total} ({'SDK default — 503s silently retried' if args.retry_total > 0 else 'disabled — 503s surface as errors'})")
     print()
 
     started_at = datetime.now(timezone.utc)
     end_time = time.monotonic() + args.duration
 
     raw_results: list[tuple[int, float]] = []
-    counters = {"total": 0, "throttled": 0}
+    counters = {"total": 0, "throttled": 0, "errors_503": 0}
 
     service_name = endpoint.split("//")[-1].split(".")[0]
 
@@ -374,6 +383,7 @@ async def run_load_test(args: argparse.Namespace) -> None:
         endpoint=endpoint,
         index_name=index,
         credential=credential,
+        retry_total=args.retry_total,
     ) as client:
         if args.profile == "semantic":
             print("Checking semantic ranker availability ...")
@@ -392,6 +402,7 @@ async def run_load_test(args: argparse.Namespace) -> None:
                 print(
                     f"  [{elapsed:4.0f}s] total={counters['total']:4d}  "
                     f"429s={counters['throttled']:3d}  "
+                    f"503s={counters['errors_503']:3d}  "
                     f"qps={qps:.1f}"
                 )
 
@@ -422,6 +433,7 @@ async def run_load_test(args: argparse.Namespace) -> None:
     print(f"  Total requests : {stats['total_requests']}")
     print(f"  Successful     : {stats['successful']}")
     print(f"  Throttled 429  : {stats['throttled_429']}  ({stats['throttle_pct']}%)")
+    print(f"  Overloaded 503 : {stats['errors_503']}  ({stats['error_503_pct']}%)")
     print(f"  p50 latency    : {stats['p50_ms']} ms")
     print(f"  p95 latency    : {stats['p95_ms']} ms")
     print(f"  p99 latency    : {stats['p99_ms']} ms")

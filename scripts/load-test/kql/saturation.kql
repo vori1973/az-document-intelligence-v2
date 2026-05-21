@@ -1,0 +1,39 @@
+// saturation.kql
+// Replica saturation pattern: QPS plateau + latency climb.
+//
+// Azure Search does not always return 429s under load — instead it queues
+// excess requests and degrades via latency. This query surfaces that pattern:
+//
+//   QPS stays flat  →  the replica has hit its throughput ceiling
+//   p95 climbs      →  requests are sitting in the service queue
+//
+// When both signals appear together, the replica is saturated. Adding replicas
+// distributes the queue and brings latency back down.
+//
+// Use 1-minute bins during a load test to see the ramp in near-real time.
+// Widen to 5m bins for production trend analysis.
+//
+// Columns: TimeGenerated, qps, p50_ms, p95_ms, p99_ms, total, errors_503
+//
+// Prerequisites:
+//   - Diagnostic setting enabled on the Azure AI Search resource
+//   - Category: OperationLogs → sent to this Log Analytics workspace
+
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.SEARCH"
+| where OperationName startswith "Query."
+| summarize
+    total      = count(),
+    succeeded  = countif(resultSignature_d == 200),
+    errors_503 = countif(resultSignature_d == 503),
+    p50_ms     = percentile(DurationMs, 50),
+    p95_ms     = percentile(DurationMs, 95),
+    p99_ms     = percentile(DurationMs, 99)
+    by bin(TimeGenerated, 1m)
+| extend qps = round(todouble(succeeded) / 60.0, 2)
+| project TimeGenerated, qps, p50_ms, p95_ms, p99_ms, total, errors_503
+| order by TimeGenerated asc
+// ── How to read this output ──────────────────────────────────────────────────
+// Healthy:     qps grows with concurrency,  p95 stays low
+// Saturated:   qps flat or falling,         p95 climbing steeply
+// Overloaded:  errors_503 > 0               service queue exhausted
