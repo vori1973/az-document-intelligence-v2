@@ -164,9 +164,35 @@ az-document-intelligence-v2/
   📁 scripts/
   |   deploy.sh
   |
+  |   📁 load-test/           — Azure AI Search load testing & advisor tools
+  |       📄 README.md        — full usage guide
+  |       seed_index.py       — inject synthetic chunks to reach realistic index size
+  |       load_test.py        — async concurrent load runner (concurrency, profile, retries)
+  |       advisor.py          — reads results/ → prints replica recommendations
+  |       embed_queries.py    — one-time: pre-embed queries via Azure OpenAI
+  |       📁 kql/             — Log Analytics queries (throttling, latency, saturation)
+  |
   📁 tests/
       📁 unit/ · 📁 integration/
 ```
+
+---
+
+## 🧪 Load Testing
+
+`scripts/load-test/` contains an educational load-testing toolkit for the Azure AI Search index.
+
+| Tool | Purpose |
+|------|---------|
+| `seed_index.py` | Inject synthetic chunks to simulate realistic index sizes (50k–200k docs) before load testing. Uses random unit vectors — no pipeline required. |
+| `load_test.py` | Async concurrent load runner. Configurable concurrency, duration, query profile (vector / hybrid / semantic), and SDK retry behaviour. |
+| `advisor.py` | Reads `results/` and prints replica scaling recommendations with threshold rules. |
+| `kql/` | Log Analytics queries for throttling rate, latency trend, and the replica saturation pattern (QPS plateau + latency climb). |
+
+See **[scripts/load-test/README.md](scripts/load-test/README.md)** for the full workflow including RBAC setup, seeding guidance, and how to interpret results.
+
+> **Note:** Azure Search S1 degrades under load via latency (queuing), not HTTP 429s.
+> The saturation signal is QPS plateauing while p95 climbs — visible in `saturation.kql`.
 
 ---
 

@@ -24,6 +24,22 @@ without needing access to a customer environment.
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│  OPTIONAL — SEED THE INDEX  (Step 0)                            │
+│                                                                 │
+│  seed_index.py --chunks 50000                                   │
+│                                                                 │
+│  Generates random unit vectors + placeholder text fields        │
+│  Uploads directly to Azure AI Search (bypasses pipeline)        │
+│  Prefix synthetic- on all IDs → safe to delete with --delete   │
+│                                                                 │
+│  Without seeding: small dev index → zero 429s at any           │
+│  concurrency (too cheap per query to saturate a replica)        │
+│  With seeding:    realistic index size → 429s appear and        │
+│  replica scaling produces measurable latency improvement        │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
 │  LOAD TEST RUN                                                  │
 │                                                                 │
 │  load_test.py --concurrency 20 --duration 60 --profile hybrid  │
@@ -79,6 +95,7 @@ without needing access to a customer environment.
 scripts/load-test/
   README.md               this file
   embed_queries.py        one-time: embed a set of text queries via AOAI
+  seed_index.py           inject synthetic chunks to reach realistic index size
   load_test.py            async load runner (concurrency, duration, profile)
   advisor.py              reads results/ → prints recommendations
   query_bank.json         pre-embedded queries (gitignored)
@@ -135,6 +152,10 @@ The identity running the scripts needs the following roles:
 |---|---|---|
 | `embed_queries.py` | `Cognitive Services User` | Azure OpenAI resource |
 | `load_test.py` | `Search Index Data Reader` | Azure AI Search service |
+| `seed_index.py` | `Search Index Data Contributor` | Azure AI Search service |
+
+`Search Index Data Reader` is read-only — it is not sufficient for seeding.
+`seed_index.py` writes documents and requires `Search Index Data Contributor`.
 
 Assign to your developer identity (one-time):
 
@@ -145,6 +166,12 @@ USER_OID=$(az ad signed-in-user show --query id -o tsv)
 # Search Index Data Reader — required for load_test.py
 az role assignment create \
   --role "Search Index Data Reader" \
+  --assignee $USER_OID \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Search/searchServices/<service>
+
+# Search Index Data Contributor — required for seed_index.py
+az role assignment create \
+  --role "Search Index Data Contributor" \
   --assignee $USER_OID \
   --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Search/searchServices/<service>
 
@@ -187,6 +214,100 @@ Then source before each session:
 ```bash
 source scripts/load-test/.env
 ```
+
+---
+
+## Step 0 — Seed the Index (optional)
+
+The load test only triggers HTTP 429 throttling if the index is large enough to
+saturate a replica. A small development index (a few hundred documents) costs the
+service almost nothing per query — you will see low latency and zero 429s regardless
+of concurrency. Use `seed_index.py` to inject synthetic chunks at realistic scale
+before load testing.
+
+Synthetic chunks use random unit vectors (1536-dim) and placeholder text that
+conform to the `document-chunks` index schema. All IDs are prefixed with
+`synthetic-` so they are always distinguishable from real indexed documents.
+
+### RBAC requirement
+
+`seed_index.py` writes documents — it needs `Search Index Data Contributor`, not
+just `Search Index Data Reader`. Assign it once to your developer identity:
+
+```bash
+USER_OID=$(az ad signed-in-user show --query id -o tsv)
+
+az role assignment create \
+  --role "Search Index Data Contributor" \
+  --assignee $USER_OID \
+  --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Search/searchServices/<service>
+```
+
+Wait 1–2 minutes for RBAC propagation before running the script.
+
+### When to seed
+
+| Goal | `--chunks` value | Approximate size |
+|---|---|---|
+| Verify the tool works | 1,000 | ~6 MB |
+| Light realism check | 10,000 | ~60 MB |
+| Typical customer index | 50,000 | ~300 MB |
+| Large customer index | 200,000 | ~1.2 GB |
+
+### Seed the index
+
+```bash
+# Seed 50,000 synthetic chunks (recommended starting point)
+python seed_index.py --chunks 50000
+
+# Custom batch size (default 500; max 1000 per Azure SDK limit)
+python seed_index.py --chunks 50000 --batch-size 200
+```
+
+Progress is printed per batch:
+
+```
+Seeding 50,000 synthetic chunks in batches of 500...
+  Batch 1/100 (500 docs) | cumulative: 500 | elapsed: 1.2s | 416 chunks/sec
+  Batch 2/100 (500 docs) | cumulative: 1,000 | elapsed: 2.3s | 435 chunks/sec
+  ...
+Done. Uploaded 50,000 synthetic chunks in 115.4s (433 chunks/sec).
+Wait 2-5 minutes for the HNSW graph to stabilise before running the load test.
+```
+
+Wait **2–5 minutes** after seeding. The HNSW graph needs time to stabilise
+after a bulk upload — running the load test immediately will produce lower
+latency than a production index at rest.
+
+### Delete synthetic chunks after testing
+
+```bash
+# Remove all synthetic chunks — real documents are untouched
+python seed_index.py --delete
+```
+
+Output:
+
+```
+Searching for synthetic chunks...
+Found 50,000 synthetic chunks. Deleting...
+  Deleted 500/50,000
+  Deleted 1,000/50,000
+  ...
+Done. Deleted 50,000 synthetic chunks.
+```
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `Permission denied (HTTP 403)` | Missing `Search Index Data Contributor` role | Run the `az role assignment create` command above and wait 1–2 min |
+| `Unauthenticated (HTTP 401)` | No Azure credential available | Run `az login` first |
+| `Bad request (HTTP 400)` | Index schema changed, or an OData filter function not supported by the API version | Compare `make_synthetic_chunk()` in `seed_index.py` against `step7_search.py` field definitions |
+| `AZURE_SEARCH_ENDPOINT not set` | Missing environment variable | Source `scripts/load-test/.env` before running |
+
+The script prints a clear error message for each of these cases and exits immediately
+without a Python traceback.
 
 ---
 

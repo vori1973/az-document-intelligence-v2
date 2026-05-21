@@ -56,9 +56,39 @@ select your workspace > **Logs**), then paste and run the queries from this dire
 |------------------------|------------------------------------------------------------|
 | `throttling.kql`       | 429 throttle rate grouped by 5-minute window               |
 | `latency.kql`          | p50/p95/p99 latency trend by 5-minute window               |
+| `saturation.kql`       | QPS plateau + latency climb — replica saturation pattern (1-min bins) |
 | `semantic-impact.kql`  | Before/after latency comparison when semantic ranker is enabled |
 
 Set the **Time range** to cover your load test window.
+
+---
+
+## Observing Replica Saturation Without 429s
+
+Azure Search S1 **queues excess requests rather than immediately rejecting them**.
+You may never see 429s even when a replica is fully saturated — the service simply
+holds requests in a queue and they complete slowly.
+
+Run `saturation.kql` during a load test. The saturation pattern looks like this:
+
+```
+TimeGenerated       qps    p50_ms   p95_ms   p99_ms   errors_503
+──────────────────────────────────────────────────────────────────
+2026-05-21 19:38    14.5     181    2,001    2,110         0      ← healthy
+2026-05-21 19:40    12.8     536    3,505    4,752         0      ← queuing starts
+2026-05-21 19:42    14.2   2,367    5,300    5,850         0      ← saturated
+2026-05-21 19:44    15.4   4,692    8,133    9,231         0      ← saturated
+2026-05-21 19:45    13.0   7,665   11,266   12,741         0      ← saturated
+```
+
+**Read the signals:**
+- `qps` stays flat at ~13–15 regardless of how many workers are firing — this is the
+  throughput ceiling. The replica is processing as fast as it can.
+- `p95_ms` climbs steeply — requests are waiting in the service queue before being served.
+- `errors_503` appear only when the queue itself is exhausted (rare on S1 with moderate load).
+
+**Adding replicas distributes the queue** — each replica handles its share, so both
+QPS and latency improve. Re-run `saturation.kql` after scaling to see the difference.
 
 ---
 
