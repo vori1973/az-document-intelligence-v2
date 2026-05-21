@@ -1,0 +1,23 @@
+// throttling.kql
+// 429 throttle rate grouped by 5-minute window.
+// Run in Log Analytics against an Azure AI Search resource with diagnostics enabled.
+//
+// Columns: TimeGenerated, total, throttled, throttle_pct
+//
+// Prerequisites:
+//   - Diagnostic setting enabled on the Azure AI Search resource
+//   - Category: OperationLogs → sent to this Log Analytics workspace
+//   - Allow 5–10 minutes after enabling diagnostics for logs to appear
+//
+// Adjust the time range using the Log Analytics time picker or the 'ago()' filter below.
+
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.SEARCH"
+| where OperationName startswith "Query."
+| summarize
+    total     = count(),
+    throttled = countif(resultSignature_d == 429)
+    by bin(TimeGenerated, 5m)
+| extend throttle_pct = round(todouble(throttled) / todouble(total) * 100, 2)
+| project TimeGenerated, total, throttled, throttle_pct
+| order by TimeGenerated asc

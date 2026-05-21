@@ -1,0 +1,29 @@
+// latency.kql
+// p50/p95/p99 latency trend by 5-minute window, plus QPS.
+// Run in Log Analytics against an Azure AI Search resource with diagnostics enabled.
+//
+// Columns: TimeGenerated, p50, p95, p99, qps
+//
+// Prerequisites:
+//   - Diagnostic setting enabled on the Azure AI Search resource
+//   - Category: OperationLogs → sent to this Log Analytics workspace
+//   - Allow 5–10 minutes after enabling diagnostics for logs to appear
+//
+// Note: DurationMs is server-side processing time. It excludes network round-trip latency
+// observed client-side. Expect client-measured p95 to be 20–100ms higher.
+//
+// Adjust the time range using the Log Analytics time picker or the 'ago()' filter below.
+
+AzureDiagnostics
+| where ResourceProvider == "MICROSOFT.SEARCH"
+| where OperationName startswith "Query."
+| where resultSignature_d == 200  // successful requests only; remove to include 429s
+| summarize
+    p50 = percentile(DurationMs, 50),
+    p95 = percentile(DurationMs, 95),
+    p99 = percentile(DurationMs, 99),
+    request_count = count()
+    by bin(TimeGenerated, 5m)
+| extend qps = round(todouble(request_count) / 300.0, 2)  // 300 seconds in a 5-min bin
+| project TimeGenerated, p50, p95, p99, qps
+| order by TimeGenerated asc
