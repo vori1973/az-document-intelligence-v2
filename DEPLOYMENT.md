@@ -53,12 +53,48 @@ az account set --subscription "<your-subscription-id>"
 4. Confirm "Deploy to Function App" in the dialog
 5. Watch the Output panel for `Deployment successful`
 
-### 4. Verify
+### 4. Wire Event Grid subscriptions
+
+> **Required after code deploy.** Bicep only creates the Event Grid System Topic — subscriptions must be created after `func publish` because Event Grid validates that the function endpoint exists.
+
+Run these two CLI commands (replace `<subscription-id>` with your subscription ID):
+
+```bash
+RESOURCE_GROUP="docintv2-dev-rg"
+SYSTEM_TOPIC="docintv2devst-topic"
+FUNC_APP="docintv2-dev-func"
+SUB=$(az account show --query id -o tsv)
+
+# ingest: BlobCreated -> ingest_trigger
+az eventgrid system-topic event-subscription create \
+  --name "ingest-pdf" \
+  --resource-group $RESOURCE_GROUP \
+  --system-topic-name $SYSTEM_TOPIC \
+  --endpoint-type azurefunction \
+  --endpoint "/subscriptions/$SUB/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNC_APP/functions/ingest_trigger" \
+  --included-event-types "Microsoft.Storage.BlobCreated" \
+  --advanced-filter subject StringEndsWith ".pdf" \
+  --advanced-filter subject StringBeginsWith "/blobServices/default/containers/documents/"
+
+# delete: BlobDeleted -> delete_trigger
+az eventgrid system-topic event-subscription create \
+  --name "delete-pdf" \
+  --resource-group $RESOURCE_GROUP \
+  --system-topic-name $SYSTEM_TOPIC \
+  --endpoint-type azurefunction \
+  --endpoint "/subscriptions/$SUB/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$FUNC_APP/functions/delete_trigger" \
+  --included-event-types "Microsoft.Storage.BlobDeleted" \
+  --advanced-filter subject StringEndsWith ".pdf" \
+  --advanced-filter subject StringBeginsWith "/blobServices/default/containers/documents/"
+```
+
+### 5. Verify
 
 1. In the Azure panel, expand `docintv2-dev-func` → **Functions**
 2. You should see: `ingest_trigger`, `delete_trigger`, `pipeline_orchestrator_fn`, `cleanup_orchestrator_fn`, and all activity functions (`step1_preanalysis`, `step2_adi`, `step3_router`, `extract_page`, `ocr_page`, `step5_chunks`, `step6_embed`, `step7_search`, `cleanup_activity`)
 3. Upload a test PDF to the `documents` container (Azure panel → Storage Accounts → Blob Containers → documents → Upload)
 4. Watch the pipeline execute: Function App → **Monitor** in the Azure portal
+5. The AI Search index (`document-chunks`) is created automatically by `step7_search` on first run — no manual index setup required
 
 ---
 
@@ -69,7 +105,7 @@ chmod +x scripts/deploy.sh
 ./scripts/deploy.sh dev
 ```
 
-The script runs all steps end-to-end: resource group → Bicep deploy → Key Vault secret → `func publish`.
+The script runs all steps end-to-end: resource group → Bicep deploy → Key Vault secret → `func publish` → Event Grid subscriptions.
 
 See inline comments in `scripts/deploy.sh` for details.
 
@@ -83,7 +119,7 @@ All resources are created inside `docintv2-dev-rg`. All service-to-service authe
 
 | Resource | Type | Role |
 |----------|------|------|
-| `docintv2-dev-func` | Function App (Flex Consumption) | Hosts all pipeline logic. Scales to zero when idle. Contains `ingest_trigger`, `delete_trigger`, the Durable orchestrator, and one activity function per pipeline step. |
+| `docintv2-dev-func` | Function App (Flex Consumption, Python 3.13, Linux) | Hosts all pipeline logic. Scales to zero when idle. Contains `ingest_trigger`, `delete_trigger`, the Durable orchestrator, and one activity function per pipeline step. |
 | `docintv2-dev-plan` | App Service Plan (FC1) | The Flex Consumption billing/scaling plan that backs the Function App. Not a dedicated server. |
 
 ### Storage
@@ -117,7 +153,9 @@ All resources are created inside `docintv2-dev-rg`. All service-to-service authe
 
 | Resource | Type | Role |
 |----------|------|------|
-| `docintv2devst-topic` | Event Grid System Topic | Listens to blob events on the storage account. Routes `BlobCreated` events on `documents/*.pdf` to `ingest_trigger` (starts pipeline), and `BlobDeleted` events to `delete_trigger` (removes chunks from search index). Makes the pipeline fully event-driven — no polling or manual triggering required. |
+| `docintv2devst-topic` | Event Grid System Topic | Listens to blob events on the storage account. Bicep creates the System Topic only. Two event subscriptions (`ingest-pdf`, `delete-pdf`) are wired by the CLI script (or Path A step 4) after `func publish`, because Event Grid validates the function endpoint exists before accepting subscriptions. |
+| `ingest-pdf` subscription | Event Grid Subscription | Routes `BlobCreated` on `documents/*.pdf` → `ingest_trigger` to start the pipeline. |
+| `delete-pdf` subscription | Event Grid Subscription | Routes `BlobDeleted` on `documents/*.pdf` → `delete_trigger` to remove chunks and artifacts. |
 
 ### Security
 
@@ -151,10 +189,12 @@ Your deploying user is granted **Key Vault Secrets Officer** by Bicep so the dep
 ### Data flow
 
 ```
+INGEST PATH
+-----------
 PDF uploaded to documents/
          |
          v
-   Event Grid topic  (BlobCreated)
+   Event Grid  (BlobCreated, ingest-pdf subscription)
          |
          v
    ingest_trigger
@@ -169,7 +209,20 @@ PDF uploaded to documents/
          +-- [fan-out] ocr_page × N      --> Mistral OCR [disabled: skipped, ADI covers all pages]
          +-- step5_chunks       --> paragraph / table-row / figure chunks --> processing/
          +-- step6_embed        --> OpenAI text-embedding-ada-002 embeddings
-         +-- step7_search       --> index chunks + embeddings into AI Search
+         +-- step7_search       --> ensure index schema, upsert chunks into AI Search
+
+DELETE PATH
+-----------
+PDF deleted from documents/
+         |
+         v
+   Event Grid  (BlobDeleted, delete-pdf subscription)
+         |
+         v
+   delete_trigger
+         |
+         +-- delete all AI Search chunks where document_id matches
+         +-- delete all processing/ artifacts for that doc_id
 ```
 
 ---
