@@ -1,0 +1,5 @@
+results/
+query_bank.json
+__pycache__/
+*.pyc
+.env

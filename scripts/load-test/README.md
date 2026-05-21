@@ -1,0 +1,321 @@
+# Azure AI Search — Load Test & Advisor
+
+Educational load-testing tool for Azure AI Search (Standard tier).
+Simulates concurrent users, measures latency and throttling (HTTP 429),
+and produces actionable replica/partition recommendations.
+
+Designed to illustrate before/after behaviour when scaling replicas —
+without needing access to a customer environment.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ONE-TIME SETUP                                                 │
+│                                                                 │
+│  embed_queries.py                                               │
+│  ["what is the VELYS procedure?", "knee implant sizing", ...]   │
+│         │                                                       │
+│         ▼  Azure OpenAI  text-embedding-ada-002                 │
+│  query_bank.json   (text + vector pairs, 20–50 queries)         │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  LOAD TEST RUN                                                  │
+│                                                                 │
+│  load_test.py --concurrency 20 --duration 60 --profile hybrid  │
+│               --replicas 1                                      │
+│                                                                 │
+│  asyncio workers, each randomly picking from the query bank,   │
+│  firing requests, recording latency + HTTP status              │
+│                                                                 │
+│  Profiles:                                                      │
+│    vector    vector search only (HNSW, no keyword)             │
+│    hybrid    vector + keyword  (most common production shape)   │
+│    semantic  hybrid + semantic reranking  (highest cost)        │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  RESULTS  results/2026-05-21T14-30_c20_hybrid_r1.json           │
+│                                                                 │
+│  {                                                              │
+│    "concurrency": 20,   "profile": "hybrid",                   │
+│    "replicas": 1,       "duration_s": 60,                       │
+│    "total_requests": 487,  "successful": 451,                   │
+│    "throttled_429": 36,    "throttle_pct": 7.4,                 │
+│    "p50_ms": 210,   "p95_ms": 890,   "p99_ms": 1840,           │
+│    "achieved_qps": 7.5                                          │
+│  }                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  ADVISOR                                                        │
+│                                                                 │
+│  advisor.py results/                                            │
+│                                                                 │
+│  Compares runs across replica counts                            │
+│  Applies threshold rules → prints human-readable suggestions   │
+│  Outputs: replica recommendation, query optimization hints,     │
+│           KQL queries to run in customer Log Analytics          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Directory Structure
+
+```
+scripts/load-test/
+  README.md               this file
+  embed_queries.py        one-time: embed a set of text queries via AOAI
+  load_test.py            async load runner (concurrency, duration, profile)
+  advisor.py              reads results/ → prints recommendations
+  query_bank.json         pre-embedded queries (gitignored if > 1 MB)
+  kql/
+    README.md             customer-facing KQL reference
+    latency.kql           p50/p95/p99 latency trend
+    throttling.kql        429 rate by time window
+  results/                timestamped JSON outputs (gitignored)
+  requirements.txt
+```
+
+---
+
+## Azure AI Search — Standard Tier Reference
+
+| Resource        | Limit                          |
+|-----------------|--------------------------------|
+| Replicas        | 1–12                           |
+| Partitions      | 1–12  (160 GB each)            |
+| Search units    | replicas × partitions, max 36  |
+| Min for SLA     | 2 replicas (read), 3 (r/w)     |
+
+**For this test:** sample documents fit comfortably in 1 partition.
+Only replica count is varied. Partitions are irrelevant at this data size.
+
+**How replicas help:**
+Each replica handles a share of query load independently.
+Adding replicas increases QPS capacity and reduces latency under load —
+it does not increase storage or index size.
+
+---
+
+## Setup
+
+### Prerequisites
+
+- Python 3.11+
+- Azure AI Search (Standard tier) with an existing index
+- Azure OpenAI endpoint with `text-embedding-ada-002` deployment
+- `DefaultAzureCredential` configured (same MI/identity as the main pipeline)
+
+### Install
+
+```bash
+cd scripts/load-test
+pip install -r requirements.txt
+```
+
+### Environment variables
+
+The tool reuses the same env vars as the main pipeline:
+
+```
+AZURE_SEARCH_ENDPOINT    https://<name>.search.windows.net
+AZURE_SEARCH_INDEX       document-chunks
+AOAI_ENDPOINT            https://<name>.openai.azure.com
+AOAI_EMBEDDING_DEPLOYMENT text-embedding-ada-002
+```
+
+---
+
+## Step 1 — Generate the Query Bank (one-time)
+
+The query bank is a JSON file of pre-embedded queries.
+Pre-embedding means the AOAI call happens once, not on every test request —
+so the load test measures pure search latency, not embedding latency.
+
+```bash
+python embed_queries.py
+# writes query_bank.json
+```
+
+Queries are domain-realistic for the sample medical device documents:
+
+- "recommended surgical technique for total knee replacement"
+- "VELYS robotic system setup and calibration"
+- "sports medicine implant sizing guide"
+- "knee arthroplasty contraindications"
+- "instrument sterilization requirements"
+- ... (20–30 total)
+
+To add your own queries, edit the `QUERIES` list in `embed_queries.py`.
+
+---
+
+## Step 2 — Run a Load Test
+
+```bash
+python load_test.py \
+  --concurrency 10 \
+  --duration 60 \
+  --profile hybrid \
+  --replicas 1
+```
+
+| Flag            | Default  | Description                              |
+|-----------------|----------|------------------------------------------|
+| `--concurrency` | 10       | Number of parallel workers               |
+| `--duration`    | 60       | Test duration in seconds                 |
+| `--profile`     | hybrid   | `vector` / `hybrid` / `semantic`         |
+| `--replicas`    | 1        | Metadata only — does not change the service |
+
+Results are written to `results/YYYY-MM-DDTHH-MM_cN_PROFILE_rN.json`.
+
+### Query profiles
+
+| Profile    | What it sends                         | Relative cost |
+|------------|---------------------------------------|---------------|
+| `vector`   | Vector search only (HNSW)             | Medium        |
+| `hybrid`   | Vector + keyword (BM25)               | Medium–High   |
+| `semantic` | Hybrid + semantic reranking           | High          |
+
+Start with `hybrid` — it represents the most common production query shape
+when using a Foundry/RAG agent.
+
+---
+
+## Step 3 — Before/After Replica Comparison
+
+This is the core illustration. Run the same test at 1 replica and 3 replicas.
+
+### Workflow
+
+```
+1. Confirm current replica count:
+   az search service show \
+     --name <service> --resource-group <rg> \
+     --query "properties.replicaCount"
+
+2. Run test at 1 replica:
+   python load_test.py --concurrency 20 --duration 60 \
+     --profile hybrid --replicas 1
+
+3. Scale up:
+   az search service update \
+     --name <service> --resource-group <rg> \
+     --replica-count 3
+   # Wait ~3 minutes for provisioning
+
+4. Run test at 3 replicas (same concurrency and profile):
+   python load_test.py --concurrency 20 --duration 60 \
+     --profile hybrid --replicas 3
+
+5. Compare:
+   python advisor.py results/
+```
+
+### Expected pattern
+
+```
+Concurrency → 20 concurrent users, hybrid profile
+
+Replicas = 1                    Replicas = 3
+────────────────────────────    ────────────────────────────
+p50  latency:  210 ms           p50  latency:   95 ms
+p95  latency:  890 ms           p95  latency:  180 ms
+429  rate:     7.4%             429  rate:      0.0%
+achieved QPS:  7.5              achieved QPS:  19.1
+```
+
+Numbers are illustrative. Actual values depend on query complexity,
+document count, and index size.
+
+---
+
+## Step 4 — Advisor Output
+
+```bash
+python advisor.py results/
+```
+
+The advisor reads all JSON files in `results/`, groups by replica count,
+and prints a recommendation. Example output:
+
+```
+=== Azure AI Search Load Test Report ===
+
+Run: hybrid profile, 20 concurrent users, 60s
+
+  Replicas=1  p95=890ms  429_rate=7.4%  QPS=7.5
+  Replicas=3  p95=180ms  429_rate=0.0%  QPS=19.1
+
+Findings:
+  [THROTTLING]  At 1 replica, 7.4% of requests were throttled (HTTP 429).
+                Customers will see intermittent failures at this concurrency.
+
+  [LATENCY]     p95 dropped from 890ms to 180ms (+80%) after adding 2 replicas.
+
+Recommendations:
+  1. Add replicas to handle current load (minimum 3 for read SLA).
+     Estimated replicas needed for 20 concurrent users: 3
+     az search service update --replica-count 3 ...
+
+  2. Semantic reranking detected. If not required on all queries,
+     limit semantic to top-20 results to reduce ranker quota pressure.
+
+  3. See kql/ for Log Analytics queries to monitor this in production.
+```
+
+---
+
+## Advisor — Threshold Rules
+
+| Condition                              | Recommendation                          |
+|----------------------------------------|-----------------------------------------|
+| 429 rate > 5%                          | Add replicas; calculate N from QPS ratio |
+| 429 rate 1–5%                          | Early warning; add 1–2 replicas         |
+| p95 > 800ms, 429 rate = 0%            | Query complexity; check semantic use    |
+| p95 > 1000ms, profile = semantic      | Reduce semantic result window           |
+| p95 < 300ms, 429 rate = 0%            | Healthy at current concurrency          |
+
+**Replica estimate formula:**
+
+```
+replicas_needed = ceil(target_qps / (achieved_qps_at_1_replica))
+```
+
+This is a lower bound — network jitter and query variance add ~20% buffer.
+
+---
+
+## KQL Reference
+
+See `kql/README.md` for queries to run in a customer's Log Analytics workspace.
+
+Covers:
+- 429 throttle rate by 5-minute window
+- p50/p95/p99 latency trend
+- Query volume and QPS
+
+**Honest caveat:** Azure Search diagnostics do not expose replica-level
+saturation as a direct metric. The signal is inferred from the pattern:
+latency climbing + 429s appearing + QPS plateau. The KQL queries surface
+this pattern — they do not report a single "replica full" number.
+
+---
+
+## Limitations
+
+- **Not a benchmark:** results reflect this index size and query bank.
+  Scale characteristics differ with larger indexes and different query shapes.
+- **Replica metadata is manual:** `--replicas` is a label you provide;
+  the tool does not read or change the Azure Search service configuration.
+- **Embedding latency excluded:** the query bank pre-embeds all queries,
+  so results show search-only latency, not end-to-end RAG latency.
+- **Single region:** no cross-region latency or geo-distribution effects.
