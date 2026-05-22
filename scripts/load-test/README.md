@@ -595,6 +595,61 @@ This is a lower bound — network jitter and query variance add ~20% buffer.
 
 ---
 
+## Why Replicas Matter Even Without Search 429s
+
+Azure AI Search S1 degrades under load via **latency**, not HTTP 429s. The service
+queues excess requests and processes them in turn — customers see slow responses,
+not errors. This makes the root cause easy to misdiagnose.
+
+### The misdiagnosis pattern
+
+In a typical RAG agent, three services touch every request:
+
+```
+User query
+    │
+    ▼
+AOAI embedding (text-embedding-ada-002)
+    │
+    ▼
+Azure Search  ← queues at 1 replica → p95 climbs to 10–25 seconds
+    │
+    ▼
+AOAI completion (GPT-4o / GPT-4)
+```
+
+When Search latency climbs to 10–25 seconds per query, each agent request holds
+an AOAI connection open for that entire duration. Under concurrent load this
+exhausts AOAI TPM/RPM quota — and the customer sees **AOAI 429s**, not Search
+errors. The 429s disappear when Search is scaled, but the customer never realised
+Search was the root cause.
+
+### What the data shows
+
+In load tests with 50,000 synthetic chunks and 300 concurrent workers:
+
+```
+Replicas = 1                    Replicas = 3
+────────────────────────────    ────────────────────────────
+p50  latency:  19,007 ms        p50  latency:   7,401 ms
+p95  latency:  24,232 ms        p95  latency:  10,995 ms   (-55%)
+429  rate:         0.0%         429  rate:         0.0%
+achieved QPS:      19.4         achieved QPS:      41.5    (+114%)
+```
+
+No 429s from Search in either run. But the latency improvement is real and
+directly reduces downstream AOAI quota pressure.
+
+### How to use this in a customer conversation
+
+| Customer says | Likely root cause | What to check |
+|---|---|---|
+| "Agent throws 429s under load" | AOAI TPM exhausted downstream of slow Search | Run `saturation.kql` — look for QPS plateau + latency climb |
+| "Search feels slow at peak hours" | Replica saturation (queuing) | Before/after replica comparison with this tool |
+| "Adding AOAI capacity didn't fix the 429s" | Search latency holding connections open | Scale Search replicas, re-test |
+
+---
+
 ## KQL Reference
 
 See `kql/README.md` for queries to run in a customer's Log Analytics workspace.
