@@ -108,7 +108,7 @@ scripts/load-test/
     <timestamp>_cN_PROFILE_rN/
       summary.json        aggregated stats — read by advisor.py
       log.jsonl           per-request detail (only when --log-requests)
-  advisory/               generated Markdown reports (committed)
+  advisory/               generated Markdown reports (gitignored)
     <timestamp>_report.md
   requirements.txt
   .env                    your env vars (gitignored, create from example below)

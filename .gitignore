@@ -37,3 +37,9 @@ Thumbs.db
 # Output / temp
 output/
 *.tmp
+
+
+# Load test output (machine-generated, not committed)
+scripts/load-test/results/
+scripts/load-test/advisory/
+scripts/load-test/query_bank.json

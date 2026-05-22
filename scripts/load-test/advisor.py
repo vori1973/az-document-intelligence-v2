@@ -280,6 +280,7 @@ def generate_markdown(results: list[dict], grouped: dict, findings: list[str], r
         "|------------|---------|",
         "| `kql/throttling.kql` | 429 rate by 5-minute window |",
         "| `kql/latency.kql` | p50/p95/p99 latency trend |",
+        "| `kql/saturation.kql` | QPS plateau + latency climb — replica saturation pattern |",
         "| `kql/semantic-impact.kql` | Before/after latency when enabling semantic ranker |",
     ]
 
@@ -320,6 +321,31 @@ def analyze(results: list[dict]) -> tuple[dict, list[str], list[str]]:
         p95_ms = base_run.get("p95_ms", 0.0)
         replicas = base_run.get("replicas", 1)
 
+        # Check if a before/after replica comparison validates scaling
+        scaling_validated = False
+        if len(replica_counts) > 1:
+            top_run = best_run(replica_groups[replica_counts[-1]])
+            top_replicas = replica_counts[-1]
+            top_p95 = top_run.get("p95_ms", 0.0)
+            top_qps = top_run.get("achieved_qps", 0.0)
+            base_qps = base_run.get("achieved_qps", 0.0)
+            p95_improvement = (p95_ms - top_p95) / p95_ms * 100 if p95_ms > 0 else 0
+            qps_improvement = (top_qps - base_qps) / base_qps * 100 if base_qps > 0 else 0
+            if p95_improvement >= 20 or qps_improvement >= 20:
+                scaling_validated = True
+                findings.append(
+                    f"[SCALING_VALIDATED]  {profile} profile: adding replicas "
+                    f"({replicas} → {top_replicas}) reduced p95 by {p95_improvement:.0f}% "
+                    f"({p95_ms:.0f}ms → {top_p95:.0f}ms) and increased QPS by "
+                    f"{qps_improvement:.0f}% ({base_qps:.1f} → {top_qps:.1f}). "
+                    f"Latency at r={replicas} was replica-bound, not query complexity."
+                )
+                recommendations.append(
+                    f"Run production workload at {top_replicas}+ replicas.\n"
+                    f"    Scale back to 1 replica during off-peak hours to reduce cost.\n"
+                    f"    az search service update --replica-count {top_replicas} ..."
+                )
+
         # THROTTLING finding
         if throttle_pct > THROTTLE_HIGH_PCT:
             findings.append(
@@ -340,28 +366,31 @@ def analyze(results: list[dict]) -> tuple[dict, list[str], list[str]]:
                 f"Add 1-2 replicas proactively."
             )
 
-        # SEMANTIC_QUOTA finding (semantic profile, high p95, no throttle)
-        if profile == "semantic" and p95_ms > LATENCY_SEMANTIC_MS:
+        # SEMANTIC_QUOTA finding (semantic profile, high p95, no throttle, no scaling data)
+        if profile == "semantic" and p95_ms > LATENCY_SEMANTIC_MS and not scaling_validated:
             findings.append(
                 f"[SEMANTIC_QUOTA]  Semantic profile p95={p95_ms:.0f}ms. "
                 f"The semantic ranker has its own quota separate from replica QPS. "
-                f"High latency may reflect ranker saturation, not replica saturation."
+                f"High latency may reflect ranker saturation, not replica saturation. "
+                f"Run the same test with --profile hybrid to isolate the ranker cost."
             )
             recommendations.append(
                 "Limit semantic reranking scope: reduce top-N results sent to the ranker\n"
                 "    (e.g., top=5 instead of top=20) to reduce semantic ranker pressure."
             )
-        # LATENCY finding (no throttling, but high p95)
-        elif p95_ms > LATENCY_HIGH_MS and throttle_pct == 0.0:
+        # LATENCY finding — only when scaling has NOT been validated
+        elif p95_ms > LATENCY_HIGH_MS and throttle_pct == 0.0 and not scaling_validated:
             findings.append(
-                f"[LATENCY]  {profile} profile p95={p95_ms:.0f}ms with 0% throttle rate. "
-                f"High latency without throttling suggests query complexity rather than "
-                f"replica saturation."
+                f"[LATENCY]  {profile} profile p95={p95_ms:.0f}ms with 0% throttle rate "
+                f"and no before/after replica data. Azure Search S1 queues excess requests "
+                f"rather than returning 429s — this latency pattern indicates replica saturation. "
+                f"Re-run with more replicas to confirm."
             )
             recommendations.append(
-                "Check semantic reranking scope and query complexity.\n"
-                "    Consider reducing the number of results retrieved per query,\n"
-                "    or switching from 'semantic' to 'hybrid' profile for non-critical queries."
+                f"Scale to 3 replicas and re-run at the same concurrency to confirm:\n"
+                f"    az search service update --replica-count 3 ...\n"
+                f"    python load_test.py --concurrency {base_run.get('concurrency', 100)} "
+                f"--profile {profile} --replicas 3"
             )
         # SEMANTIC_OVERHEAD finding — expected ranker cost, not a problem
         elif profile == "semantic" and LATENCY_HEALTHY_MS <= p95_ms < LATENCY_SEMANTIC_MS and throttle_pct == 0.0:
@@ -431,6 +460,8 @@ def main() -> None:
         md = generate_markdown(results, grouped, findings, recommendations)
         report_path.write_text(md, encoding="utf-8")
         print(f"\nMarkdown report saved to: {report_path}")
+    else:
+        print("\nTip: add --report to save a Markdown report to advisory/")
 
 
 if __name__ == "__main__":
