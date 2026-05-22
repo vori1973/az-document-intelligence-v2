@@ -25,6 +25,6 @@
 
 ## 6. Verify
 
-- [ ] 6.1 Run `seed_index.py --chunks 1000` — confirm 1,000 documents appear in the index and progress output is correct
-- [ ] 6.2 Run `seed_index.py --delete` — confirm synthetic chunks are removed and real documents are untouched
-- [ ] 6.3 Run `load_test.py --concurrency 60 --profile hybrid` after seeding 50,000 chunks — confirm p95 latency increases and 429s appear
+- [x] 6.1 Run `seed_index.py --chunks 1000` — confirm 1,000 documents appear in the index and progress output is correct
+- [x] 6.2 Run `seed_index.py --delete` — confirm synthetic chunks are removed and real documents are untouched
+- [x] 6.3 Run `load_test.py --concurrency 60 --profile hybrid` after seeding 50,000 chunks — confirm p95 latency increases and 429s appear
