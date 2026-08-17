@@ -142,7 +142,18 @@ Archive a completed change in the experimental workflow.
    mv "<changeRoot>" "<planningHome.changesDir>/archive/<target-name>"
    ```
 
-6. **Display summary**
+6. **Close the linked GitHub issue**
+
+   If `github-issue.md` exists in the change folder, read the issue number from it and close the issue:
+   ```bash
+   gh issue close <number> --comment "Completed via OpenSpec change \`<change-name>\`, archived to \`openspec/changes/archive/<target-name>/\`."
+   ```
+
+   Do not close the issue when step 3 reported incomplete tasks — report it as still open in the summary instead, so a half-done change never looks finished on the issue tracker.
+
+   If `github-issue.md` is absent, `gh` is unavailable, or the command fails: skip silently and note it in the summary.
+
+7. **Display summary**
 
    Show archive completion summary including:
    - Change name
@@ -150,6 +161,7 @@ Archive a completed change in the experimental workflow.
    - Archive location
    - Whether specs were synced (if applicable)
    - Note about any warnings (incomplete artifacts/tasks)
+   - Linked GitHub issue closed (number), or why it was skipped
 
 **Output On Success**
 

@@ -91,7 +91,25 @@ When ready to implement, run /opsx-apply
       - Ask the user to clarify
       - Then continue with creation
 
-5. **Show final status**
+5. **Create GitHub issue**
+
+   Derive a concise issue title from the change name and proposal summary (e.g., "feat: <short description>").
+
+   Create the issue:
+   ```bash
+   gh issue create --title "<title>" --body "<proposal summary>" --label "openspec"
+   ```
+
+   Write `github-issue.md` into the change folder (`openspec/changes/<name>/github-issue.md`):
+   ```
+   **Title:** <issue title>
+   **Number:** #<issue number>
+   **URL:** <issue url>
+   ```
+
+   If `gh` is unavailable, the repo has no remote, or the command fails for any reason: skip silently, do not write `github-issue.md`, and note it in the output summary.
+
+6. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
@@ -101,6 +119,7 @@ When ready to implement, run /opsx-apply
 After completing all artifacts, summarize:
 - Change name and location
 - List of artifacts created with brief descriptions, plus any conditional artifact you skipped and why
+- GitHub issue created (number + URL), or a note if skipped
 - What's ready: "All artifacts needed for implementation are ready."
 - Prompt: "Run `/opsx-apply` or ask me to implement to start working on the tasks."
 

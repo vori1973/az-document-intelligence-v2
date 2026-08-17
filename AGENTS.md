@@ -27,8 +27,20 @@ openspec validate "<name>" --strict   # validate before implementing
 openspec show "<name>"
 ```
 
+### GitHub issues track OpenSpec changes
+
+Every change proposal gets a GitHub issue, and the issue closes when the change is archived. The issue is the outward-facing view of the change; the `openspec/changes/<name>/` folder is the detail.
+
+- `/opsx-propose` creates the issue with the `openspec` label and records it in `github-issue.md` inside the change folder.
+- Implementation commits reference it with `Refs #N`.
+- `/opsx-archive` closes it — but **only if all tasks are checked**. A half-done change must not look finished on the issue tracker.
+- An issue is closed when the work is *done*, not when it is deferred. If work is blocked on an external dependency, leave it open.
+
+> **Note:** `openspec update` overwrites the files in `.claude/skills/` and `.github/skills/`, which silently drops these two customizations. After running it, verify `gh issue create` is still in the propose skill and `gh issue close` is still in the archive skill, and restore them if not.
+
 **Rules**
 - Do not start implementing until `openspec validate <name> --strict` passes.
+- Baseline specs in `openspec/specs/` use `## Purpose` + `## Requirements`. Change deltas use `## ADDED/MODIFIED/REMOVED Requirements`. Archiving converts between them — if `openspec list --specs` shows `requirements 0`, the conversion did not happen and the spec is not being parsed.
 - Specs describe *observable behavior*, not implementation. No class names, no library choices, no step-by-step plans — those belong in `design.md`.
 - Scenarios need exactly four hashes (`#### Scenario:`). Three fails silently.
 - Keep `tasks.md` checkboxes current as you implement; that file is the progress record.

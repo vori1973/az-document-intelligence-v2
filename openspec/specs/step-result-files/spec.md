@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Makes each pipeline step's success independently verifiable from storage alone, so a partial or failed run can be diagnosed by inspecting the run folder without depending on application telemetry.
+
+## Requirements
 
 ### Requirement: Step result file written on activity success
 Each pipeline activity (step2 through step7) SHALL write a JSON file named `stepN-result.json` to `processing/{doc_id}/{run_id}/` upon successful completion. The file content SHALL match the key metrics emitted to App Insights by that step.
