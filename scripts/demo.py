@@ -12,6 +12,9 @@ Usage:
   .venv/bin/python scripts/demo.py crop  <file|blob> <page> <fig>
   .venv/bin/python scripts/demo.py ask "question"       # grounded Q&A over the index
   .venv/bin/python scripts/demo.py figures "query"      # visual retrieval only
+  .venv/bin/python scripts/demo.py pull  <file|blob>    # download all artifacts locally
+
+PDFs live in demo-assets/docs/ ; pulled artifacts land in demo-assets/output/.
 
 Uploading via the Azure portal? Start this first — it waits for the blob:
   .venv/bin/python scripts/demo.py watch myfile.pdf
@@ -37,6 +40,10 @@ AOAI = os.environ.get("DEMO_AOAI", "https://docintv2-dev-oai-e8436.openai.azure.
 CHAT_MODEL = os.environ.get("DEMO_CHAT_MODEL", "gpt-4o-mini")
 EMBED_MODEL = os.environ.get("DEMO_EMBED_MODEL", "text-embedding-ada-002")
 API_VERSION = "2024-10-21"
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_CORPUS = os.path.join(REPO_ROOT, "demo-assets", "docs")
+DEFAULT_OUTPUT = os.path.join(REPO_ROOT, "demo-assets", "output")
 
 CRED = DefaultAzureCredential()
 
@@ -143,7 +150,12 @@ def cmd_ls(*_: str) -> None:
 
 def cmd_upload(path: str) -> None:
     if not os.path.isfile(path):
-        raise SystemExit(f"No such file: {path}")
+        # Bare filename? Look in the demo assets folder.
+        candidate = os.path.join(DEFAULT_CORPUS, os.path.basename(path))
+        if os.path.isfile(candidate):
+            path = candidate
+        else:
+            raise SystemExit(f"No such file: {path}\n  (also checked {DEFAULT_CORPUS}/)")
     name = os.path.basename(path)
     size = os.path.getsize(path)
     doc_id = _doc_id(path)
@@ -274,6 +286,76 @@ def cmd_crop(path: str, page: str, fig: str) -> None:
     print(f"{GREEN}Saved{RESET} {out}  ({len(data):,} bytes)\n  from {DIM}{blob}{RESET}")
 
 
+def cmd_pull(target: str, dest: str | None = None) -> None:
+    """Download every processing artifact for a document to a local folder."""
+    doc_id = _resolve(target)
+    prefix = _run_prefix(doc_id)
+    if not prefix:
+        raise SystemExit(f"No run found for {target}. Has it finished ingesting?")
+
+    label = os.path.splitext(os.path.basename(target))[0] or doc_id
+    out = os.path.abspath(dest or os.path.join(DEFAULT_OUTPUT, label))
+    container = _blobs().get_container_client("processing")
+
+    names = list(container.list_blob_names(name_starts_with=f"{prefix}/"))
+    if not names:
+        raise SystemExit(f"No artifacts under processing/{prefix}/")
+
+    print(f"{BOLD}Pulling{RESET} {len(names)} artifacts  {DIM}processing/{prefix}/{RESET}")
+    total = 0
+    for name in names:
+        rel = name[len(prefix) + 1:]
+        path = os.path.join(out, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = container.get_blob_client(name).download_blob().readall()
+        with open(path, "wb") as fh:
+            fh.write(data)
+        total += len(data)
+
+    print(f"{GREEN}Saved{RESET} {out}  ({total/1_048_576:.1f} MB)\n")
+
+    figs = sorted(f for f in os.listdir(os.path.join(out, "figures"))) \
+        if os.path.isdir(os.path.join(out, "figures")) else []
+    jsons = sorted(f for f in os.listdir(out) if f.endswith((".json", ".md")))
+
+    print(f"{BOLD}Artifacts{RESET}")
+    for f in jsons:
+        size = os.path.getsize(os.path.join(out, f))
+        note = ARTIFACT_NOTES.get(f, "")
+        print(f"  {f:<28} {DIM}{size/1024:>8.1f} KB  {note}{RESET}")
+    if figs:
+        print(f"  {'figures/':<28} {DIM}{len(figs):>8} crops{RESET}")
+
+    print(f"\n{BOLD}Browse{RESET}")
+    print(f"  cd {out}")
+    print(f"  {DIM}# pretty-print any artifact{RESET}")
+    print(f"  python -m json.tool figure-understanding.json | less")
+    print(f"  {DIM}# every figure description, one per line{RESET}")
+    print(f"""  python -c "import json;d=json.load(open('figure-understanding.json'));"""
+          f"""[print(r['page'],'|',(r.get('understanding') or {{}}).get('short_description')) for r in d]" """)
+    if figs:
+        print(f"  {DIM}# open the crops{RESET}")
+        print(f"  explorer.exe \"$(wslpath -w figures)\"" if _is_wsl() else f"  open figures/")
+
+
+ARTIFACT_NOTES = {
+    "adi-raw.json": "raw Document Intelligence output (large)",
+    "adi-content.md": "extracted markdown",
+    "figures.json": "4A/4B — every figure, qualified and rejected, with reasons",
+    "figure-understanding.json": "4C — vision descriptions and routing",
+    "chunks.json": "composed chunks before embedding",
+    "chunks-embedded.json": "chunks with vectors (large)",
+    "routing.json": "step3 page routing decisions",
+    "step4a-result.json": "qualification summary",
+    "step4c-result.json": "vision summary",
+    "step7-result.json": "index upsert summary",
+}
+
+
+def _is_wsl() -> bool:
+    return "microsoft" in os.uname().release.lower() if hasattr(os, "uname") else False
+
+
 def _embed(text: str) -> list[float]:
     return _aoai().embeddings.create(model=EMBED_MODEL, input=[text]).data[0].embedding
 
@@ -347,7 +429,7 @@ def main() -> None:
     {
         "upload": cmd_upload, "watch": cmd_watch, "show": cmd_show,
         "crop": cmd_crop, "ask": cmd_ask, "figures": cmd_figures,
-        "ls": cmd_ls,
+        "ls": cmd_ls, "pull": cmd_pull,
     }[cmd](*args)
 
 

@@ -62,7 +62,7 @@ so you set the path once:
 ```bash
 cd /path/to/az-document-intelligence-v2
 az login                            # DefaultAzureCredential needs this
-export CORPUS=/path/to/demo/pdfs    # doc1.pdf, doc2.pdf, ... (name them as you like)
+export CORPUS=demo-assets/docs       # or any folder of PDFs
 
 .venv/bin/python scripts/demo.py show $CORPUS/doc1.pdf
 ```
@@ -163,6 +163,26 @@ While it runs, move to Act 2 in a second terminal.
 ---
 
 ## Act 2 — What the pipeline decided (~2 min)
+
+### Optional: pull everything local first
+
+Clicking through blob storage in the portal is painful. Download the whole run
+instead — JSON plus every crop:
+
+```bash
+.venv/bin/python scripts/demo.py pull mydoc.pdf
+# → demo-assets/output/mydoc/
+```
+
+It prints an annotated inventory (which file is which) and copy-paste commands
+for browsing. Useful both for prepping the demo and for showing the artifacts
+in an editor rather than a portal blade.
+
+```bash
+cd demo-assets/output/mydoc
+python -m json.tool figure-understanding.json | less
+explorer.exe "$(wslpath -w figures)"     # or: open figures/
+```
 
 ```bash
 .venv/bin/python scripts/demo.py show $CORPUS/doc1.pdf
@@ -427,7 +447,12 @@ demo.py show   <pdf|blob-name>    # qualification, understanding record, chunks
 demo.py crop   <pdf|blob-name> <pg> <n>   # save a crop to /tmp
 demo.py ask    "question"         # grounded Q&A with cited figure sources
 demo.py figures "query"           # visual retrieval only
+demo.py pull   <pdf|blob-name>    # download all artifacts to demo-assets/output/
 ```
+
+PDFs go in `demo-assets/docs/` (tracked folder, git-ignored contents — see its
+[README](../demo-assets/docs/README.md)). `upload` finds files there by bare
+name, so `demo.py upload mydoc.pdf` works from anywhere in the repo.
 
 `<pdf|blob-name>` — a local path, or the name of a blob already in `documents`
 (resolved via the same reverse name-index the delete trigger uses). That means

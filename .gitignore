@@ -43,3 +43,9 @@ output/
 scripts/load-test/results/
 scripts/load-test/advisory/
 scripts/load-test/query_bank.json
+
+# Demo assets — PDFs may be customer material; keep the folders, not the contents
+demo-assets/docs/*
+!demo-assets/docs/.gitkeep
+!demo-assets/docs/README.md
+demo-assets/output/
