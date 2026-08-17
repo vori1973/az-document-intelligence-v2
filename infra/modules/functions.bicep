@@ -65,6 +65,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   }
   properties: {
     serverFarmId: plan.id
+    httpsOnly: true
     functionAppConfig: {
       deployment: {
         storage: {
@@ -85,6 +86,8 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       }
     }
     siteConfig: {
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storageAccountName }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }

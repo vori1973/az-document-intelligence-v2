@@ -19,6 +19,11 @@ resource searchService 'Microsoft.Search/searchServices@2023-11-01' = {
     partitionCount: 1
     publicNetworkAccess: 'enabled'
     semanticSearch: 'standard'
+    authOptions: {
+      aadOrApiKey: {
+        aadAuthFailureMode: 'http401WithBearerChallenge'
+      }
+    }
   }
 }
 
