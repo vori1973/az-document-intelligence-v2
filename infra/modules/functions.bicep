@@ -46,6 +46,12 @@ param searchIndex string
 @description('Set to false to disable Mistral OCR — ADI handles all pages (use when Foundry subscription unavailable)')
 param ocrEnabled string = 'true'
 
+@description('Set to false to skip vision-based figure understanding — figure chunks fall back to caption-only text')
+param figureUnderstandingEnabled string = 'true'
+
+@description('Vision-capable model deployment used to describe figures')
+param figureUnderstandingModel string = 'gpt-4o-mini'
+
 resource plan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: planName
   location: location
@@ -109,6 +115,11 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'OCR_ENABLED', value: ocrEnabled }
         { name: 'OCR_FIGURE_ROUTING', value: 'true' }
         { name: 'OCR_MAX_CONCURRENT_PAGES', value: '5' }
+        { name: 'FIGURE_UNDERSTANDING_ENABLED', value: figureUnderstandingEnabled }
+        { name: 'FIGURE_UNDERSTANDING_MODEL', value: figureUnderstandingModel }
+        { name: 'FIGURE_CROP_DPI', value: '200' }
+        { name: 'FIGURE_MAX_CONCURRENT', value: '4' }
+        { name: 'FIGURE_MAX_PER_DOC', value: '60' }
         { name: 'PIPELINE_VERSION', value: 'v2.0' }
       ]
     }

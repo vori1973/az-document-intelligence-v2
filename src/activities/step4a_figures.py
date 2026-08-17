@@ -49,12 +49,16 @@ MAX_ASPECT_RATIO = float(os.environ.get("FIGURE_MAX_ASPECT_RATIO", "8.0"))
 CROP_DPI = int(os.environ.get("FIGURE_CROP_DPI", "200"))
 CROP_PADDING_IN = float(os.environ.get("FIGURE_CROP_PADDING_IN", "0.06"))
 
-# Words that mean "this small graphic still matters" — safety icons and
-# callouts are frequently tiny but carry the highest-value content.
+# Words that mean "this graphic still matters" — safety icons and callouts
+# are frequently tiny but carry the highest-value content. Matched only in
+# text near the figure (see _has_reference), never page-wide.
 REFERENCE_TERMS = (
     "figure", "fig.", "see ", "shown", "illustrat", "diagram",
     "warning", "caution", "danger", "note", "legend", "symbol",
 )
+
+# How far from the figure (inches) a referencing phrase still counts.
+REFERENCE_PROXIMITY_IN = float(os.environ.get("FIGURE_REFERENCE_PROXIMITY_IN", "1.0"))
 
 POINTS_PER_INCH = 72.0
 
@@ -107,18 +111,42 @@ def _page_dimensions(adi_raw: dict, page_number: int) -> tuple[float, float]:
 
 
 def _nearby_text(adi_raw: dict, page_number: int) -> str:
-    """All text on the page, lowercased — used to look for figure references."""
+    """Page text kept as (bbox, lowercased content) for proximity checks."""
     parts = []
     for para in (adi_raw.get("paragraphs") or []):
-        if any(r.get("page_number") == page_number for r in (para.get("bounding_regions") or [])):
-            parts.append(para.get("content") or "")
-    return " ".join(parts).lower()
+        for region in (para.get("bounding_regions") or []):
+            if region.get("page_number") != page_number:
+                continue
+            bbox = _polygon_bbox(region.get("polygon") or [])
+            if bbox:
+                parts.append((bbox, (para.get("content") or "").lower()))
+    return parts
 
 
-def _has_reference(caption: str | None, page_text: str) -> bool:
-    if caption:
+def _has_reference(caption: str | None, page_text, figure_bbox=None) -> bool:
+    """Decide whether the document points at this figure.
+
+    A caption is decisive. Absent one, we look for a figure-referencing term
+    in text *near* the figure rather than anywhere on the page: words like
+    "note", "see", and "figure" appear on nearly every page of a technical
+    manual, so a page-wide match would veto essentially every geometric
+    rejection and make the filter decorative.
+    """
+    if caption and caption.strip():
         return True
-    return any(term in page_text for term in REFERENCE_TERMS)
+    if figure_bbox is None:
+        return False
+
+    fx0, fy0, fx1, fy1 = figure_bbox
+    near_x0, near_y0 = fx0 - REFERENCE_PROXIMITY_IN, fy0 - REFERENCE_PROXIMITY_IN
+    near_x1, near_y1 = fx1 + REFERENCE_PROXIMITY_IN, fy1 + REFERENCE_PROXIMITY_IN
+
+    for (bx0, by0, bx1, by1), content in page_text:
+        if bx1 < near_x0 or bx0 > near_x1 or by1 < near_y0 or by0 > near_y1:
+            continue
+        if any(term in content for term in REFERENCE_TERMS):
+            return True
+    return False
 
 
 # ── 4B: deterministic qualification ───────────────────────────────────────
@@ -251,7 +279,7 @@ def step4a_figures_main(ctx: dict) -> dict:
                         ),
                     )
 
-                    has_ref = _has_reference(fig.caption, page_text)
+                    has_ref = _has_reference(fig.caption, page_text, bbox)
                     status, reason, signals = _qualify(features, fig.caption, has_ref)
 
                     candidate = FigureCandidate(

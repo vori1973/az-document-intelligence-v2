@@ -20,7 +20,7 @@ The pipeline SHALL produce a raster crop of every figure that Document Intellige
 - **THEN** that figure is recorded as not croppable and the remaining figures are still processed
 
 ### Requirement: Deterministic qualification precedes any model call
-The pipeline SHALL classify each detected figure as a candidate or a rejection using geometric and textual signals alone, before any vision model is invoked. A figure SHALL only be hard-rejected when a geometric trigger is present AND the document contains no textual reference to that figure. Rejection thresholds SHALL be configurable.
+The pipeline SHALL classify each detected figure as a candidate or a rejection using geometric and textual signals alone, before any vision model is invoked. A figure SHALL only be hard-rejected when a geometric trigger is present AND no textual reference to that figure appears in its caption or in text near it on the page. Rejection thresholds SHALL be configurable.
 
 #### Scenario: Page furniture rejected
 - **WHEN** a figure overlaps a header or footer region beyond the configured threshold and no caption or in-text reference points to it
@@ -30,13 +30,21 @@ The pipeline SHALL classify each detected figure as a candidate or a rejection u
 - **WHEN** a figure trips a geometric rejection rule but a caption or in-text reference points to it
 - **THEN** it is retained as a candidate
 
-#### Scenario: Undersized or oversized regions rejected
-- **WHEN** a figure occupies less than the minimum or more than the maximum configured fraction of the page and is unreferenced
-- **THEN** it is rejected as a rule or background region
+#### Scenario: Undersized regions rejected
+- **WHEN** a figure occupies less than the configured minimum fraction of the page and is unreferenced
+- **THEN** it is rejected as a rule or separator
+
+#### Scenario: Full-page graphics are retained for review
+- **WHEN** a figure occupies more than the configured maximum fraction of the page
+- **THEN** it is retained as a candidate carrying a routing signal, because a full-page diagram is often the most valuable figure present
 
 #### Scenario: Extreme aspect ratio rejected
 - **WHEN** an unreferenced figure's aspect ratio exceeds the configured maximum
 - **THEN** it is rejected as a separator or rule
+
+#### Scenario: Rejected figures are not indexed
+- **WHEN** a figure is rejected by deterministic qualification
+- **THEN** no chunk for it is indexed, so qualification governs index contents and not merely the vision budget
 
 ### Requirement: Qualified figures receive one schema-enforced vision call
 Each qualified candidate SHALL be described by exactly one vision model request whose response conforms to a fixed schema. The response SHALL classify the figure into a controlled taxonomy and SHALL include a one-sentence description, visible labels, component terms, warnings, search keywords, a categorical confidence label, and declared uncertainty. A response that does not conform to the schema SHALL be discarded.
