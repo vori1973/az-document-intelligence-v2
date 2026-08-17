@@ -1,5 +1,11 @@
 # ADI Figure Understanding and Visual Retrieval Extension
 
+> **Status:** Phase 1 (4A/4B/4C + enriched chunks) is **implemented and deployed**.
+> Tracked as OpenSpec change [`add-figure-understanding`](../openspec/changes/add-figure-understanding/)
+> and GitHub issue [#4](https://github.com/vori1973/az-document-intelligence-v2/issues/4).
+> This document is the original design; the OpenSpec change is the source of truth
+> for what was actually built. Operational settings live in [DEPLOYMENT.md](../DEPLOYMENT.md#figure-understanding-settings).
+
 ## Purpose
 
 This design extends an existing Azure Document Intelligence (ADI) RAG pipeline with:

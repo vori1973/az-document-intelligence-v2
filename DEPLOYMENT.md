@@ -207,6 +207,8 @@ PDF uploaded to documents/
          +-- step3_router       --> confidence check, decide pages for OCR
          +-- [fan-out] extract_page × N  --> page images --> processing/
          +-- [fan-out] ocr_page × N      --> Mistral OCR [disabled: skipped, ADI covers all pages]
+         +-- step4a_figures     --> crop figures to PNG, qualify (drop logos/rules) --> processing/
+         +-- step4c_understanding --> gpt-4o-mini vision --> description + keywords --> processing/
          +-- step5_chunks       --> paragraph / table-row / figure chunks --> processing/
          +-- step6_embed        --> OpenAI text-embedding-ada-002 embeddings
          +-- step7_search       --> ensure index schema, upsert chunks into AI Search
@@ -224,6 +226,26 @@ PDF deleted from documents/
          +-- delete all AI Search chunks where document_id matches
          +-- delete all processing/ artifacts for that doc_id
 ```
+
+---
+
+## Figure understanding settings
+
+Set in `infra/modules/functions.bicep` (**not** via `az functionapp config appsettings set` —
+`deploy.sh` redeploys Bicep and would wipe CLI-only settings).
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `FIGURE_UNDERSTANDING_ENABLED` | `true` | **Rollback switch.** Set `false` to skip vision entirely; figure chunks fall back to caption-only text and the rest of the pipeline is unaffected. |
+| `FIGURE_UNDERSTANDING_MODEL` | `gpt-4o-mini` | Vision-capable deployment on the AOAI resource. |
+| `FIGURE_CROP_DPI` | `200` | Crop render resolution. Higher = better reading of in-image labels, larger blobs. |
+| `FIGURE_MAX_CONCURRENT` | `4` | Parallel vision calls. Raise only if AOAI quota allows. |
+| `FIGURE_MAX_PER_DOC` | `60` | Per-document vision cap for cost control. Figures beyond the cap are still cropped and indexed, but without a vision description. |
+| `FIGURE_REFERENCE_PROXIMITY_IN` | `1.0` | How close (inches) page text must be to a figure to count as a textual reference during qualification. |
+
+Cost note: a 159-page catalog yielded 330 figures → 195 qualified → 60 described
+(hitting the cap) in ~47s. Raise `FIGURE_MAX_PER_DOC` for figure-dense catalogs
+where complete visual coverage matters more than per-document cost.
 
 ---
 

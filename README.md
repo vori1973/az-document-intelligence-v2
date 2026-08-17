@@ -64,6 +64,8 @@ PDF uploaded to documents/
          +-- step3_router       → confidence check, decide which pages need OCR
          +-- [fan-out] extract_page × N  → extract page PDFs → processing/
          +-- [fan-out] ocr_page × N      → Mistral OCR [disabled: ADI covers all pages]
+         +-- step4a_figures     → crop figures, qualify (drop logos/rules/separators)
+         +-- step4c_understanding → gpt-4o-mini vision → description + search keywords
          +-- step5_chunks       → paragraph / table-row / figure chunks
          +-- step6_embed        → OpenAI text-embedding-ada-002 (1536-dim)
          +-- step7_search       → create/update index schema, upsert chunks
@@ -153,10 +155,11 @@ az-document-intelligence-v2/
   |   |
   |   📁 activities/
   |   |   step1_preanalysis.py · step2_adi.py · step3_router.py
-  |   |   step4_ocr.py · step5_chunks.py · step6_embed.py · step7_search.py
+  |   |   step4_ocr.py · step4a_figures.py · step4c_understanding.py
+  |   |   step5_chunks.py · step6_embed.py · step7_search.py
   |   |
   |   📁 shared/
-  |   |   auth.py · blob_client.py · telemetry.py
+  |   |   auth.py · blob_client.py · telemetry.py · adi_normalize.py
   |   |
   |   📁 models/
   |       types.py

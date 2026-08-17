@@ -3,14 +3,14 @@
 - [x] 1.1 Add `FigureFeatures` and `FigureCandidate` models to `src/models/types.py`
 - [x] 1.2 Define 4B threshold configuration with defaults (`FIGURE_HEADER_FOOTER_OVERLAP_THRESHOLD`, `FIGURE_MIN_AREA_RATIO`, `FIGURE_MAX_AREA_RATIO`, `FIGURE_MAX_ASPECT_RATIO`)
 - [x] 1.3 Define runtime configuration (`FIGURE_UNDERSTANDING_ENABLED`, `FIGURE_UNDERSTANDING_MODEL`, `FIGURE_CROP_DPI`, `FIGURE_MAX_CONCURRENT`, `FIGURE_MAX_PER_DOC`)
-- [ ] 1.4 Declare the new app settings in `infra/modules/functions.bicep` so they are not deployment drift
+- [x] 1.4 Declare the new app settings in `infra/modules/functions.bicep` so they are not deployment drift
 
 ## 2. Step 4A — figure cropping
 
 - [x] 2.1 Convert ADI polygons (inches) to PyMuPDF rects (points) and crop at the configured DPI
 - [x] 2.2 Upload each crop as a run artifact under a `figures/` prefix keyed by page and figure index
 - [x] 2.3 Tolerate per-figure crop failure without failing the activity
-- [ ] 2.4 Verify crops visually against a known figure-rich PDF to confirm the unit conversion is correct
+- [x] 2.4 Verify crops visually against a known figure-rich PDF to confirm the unit conversion is correct
 
 ## 3. Step 4B — deterministic qualification
 
@@ -49,9 +49,9 @@
 
 ## 7. Deployment and validation
 
-- [ ] 7.1 Set the new app settings on the Function App
-- [ ] 7.2 Deploy and confirm the two new activities are registered
-- [ ] 7.3 Ingest a figure-rich PDF and inspect `figures.json`, `figure-understanding.json`, and the step result files
-- [ ] 7.4 Confirm indexed figure chunks carry an enriched `text_for_embedding`, a crop reference, and an ADI-derived page and polygon
-- [ ] 7.5 Run a retrieval query that finds a figure by its visual content rather than its caption
-- [ ] 7.6 Confirm the full unit test suite still passes
+- [x] 7.1 Set the new app settings on the Function App
+- [x] 7.2 Deploy and confirm the two new activities are registered
+- [x] 7.3 Ingest a figure-rich PDF and inspect `figures.json`, `figure-understanding.json`, and the step result files
+- [x] 7.4 Confirm indexed figure chunks carry an enriched `text_for_embedding`, a crop reference, and an ADI-derived page and polygon
+- [x] 7.5 Run a retrieval query that finds a figure by its visual content rather than its caption
+- [x] 7.6 Confirm the full unit test suite still passes
