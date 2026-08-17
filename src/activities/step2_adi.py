@@ -21,6 +21,7 @@ import time
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 
+from shared.adi_normalize import normalize_adi_dict
 from shared.auth import get_credential
 from shared.blob_client import download_document, upload_artifact, upload_json_artifact
 from shared.telemetry import timed_step, track_metric
@@ -207,8 +208,11 @@ def step2_adi_main(ctx: dict) -> dict:
         result = poller.result()
         duration_ms = (time.monotonic() - t0) * 1000
 
-        # Serialize result to dict for artifact storage
-        result_dict = result.as_dict() if hasattr(result, "as_dict") else dict(result)
+        # Serialize result to dict for artifact storage.
+        # `as_dict()` yields the REST wire format (camelCase); normalize to
+        # snake_case so every downstream consumer reads one convention.
+        raw_dict = result.as_dict() if hasattr(result, "as_dict") else dict(result)
+        result_dict = normalize_adi_dict(raw_dict)
 
         pages = result_dict.get("pages") or []
         tables = result_dict.get("tables") or []

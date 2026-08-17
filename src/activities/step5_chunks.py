@@ -20,6 +20,7 @@ import os
 import re
 from typing import Optional
 
+from shared.adi_normalize import normalize_adi_dict
 from shared.blob_client import download_artifact, download_json_artifact, upload_artifact, upload_json_artifact
 from shared.telemetry import timed_step, track_metric
 from models.types import AdiPageResult, RagChunk, RagCitation, RoutingDecision
@@ -625,7 +626,7 @@ def step5_chunks_main(ctx: dict) -> dict:
     blob_name: str = ctx["blob_name"]
 
     with timed_step("step5_chunks", doc_id, run_id):
-        adi_raw = download_json_artifact(doc_id, run_id, "adi-raw.json")
+        adi_raw = normalize_adi_dict(download_json_artifact(doc_id, run_id, "adi-raw.json"))
         adi_results_raw = download_json_artifact(doc_id, run_id, "adi-results.json")
         routing_raw = download_json_artifact(doc_id, run_id, "routing.json")
 

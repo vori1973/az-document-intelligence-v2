@@ -25,6 +25,7 @@ import os
 
 import fitz  # PyMuPDF
 
+from shared.adi_normalize import normalize_adi_dict
 from shared.blob_client import (
     download_document,
     download_json_artifact,
@@ -200,7 +201,7 @@ def step4a_figures_main(ctx: dict) -> dict:
     blob_name: str = ctx["blob_name"]
 
     with timed_step("step4a_figures", doc_id, run_id):
-        adi_raw = download_json_artifact(doc_id, run_id, "adi-raw.json")
+        adi_raw = normalize_adi_dict(download_json_artifact(doc_id, run_id, "adi-raw.json"))
         adi_results_raw = download_json_artifact(doc_id, run_id, "adi-results.json")
         adi_results = [AdiPageResult.model_validate(r) for r in adi_results_raw]
 
