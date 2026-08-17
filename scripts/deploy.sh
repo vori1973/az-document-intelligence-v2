@@ -116,12 +116,17 @@ fi
 echo ""
 if [[ "${OCR_ENABLED_PARAM}" == "false" ]]; then
   echo "[3/5] Skipping Foundry key (OCR disabled) — storing placeholder..."
-  az keyvault secret set \
+  # Non-fatal: the placeholder is unused while OCR is disabled, and org policy
+  # may force publicNetworkAccess=Disabled on the vault, blocking CLI writes.
+  if az keyvault secret set \
     --vault-name "${KEY_VAULT_NAME}" \
     --name "foundry-key" \
     --value "placeholder-ocr-disabled" \
-    --output none
-  echo "      OK (placeholder stored; update when OCR is enabled)"
+    --output none 2>/dev/null; then
+    echo "      OK (placeholder stored; update when OCR is enabled)"
+  else
+    echo "      SKIPPED (vault not reachable from here; unused while OCR disabled)"
+  fi
 else
   echo "[3/5] Storing Foundry key in Key Vault '${KEY_VAULT_NAME}'..."
   echo ""
@@ -221,7 +226,7 @@ echo "    Storage      : ${STORAGE_URL}"
 echo ""
 echo "  Next steps:"
 echo "    - Upload a PDF to the 'documents' container to trigger the pipeline"
-echo "    - Monitor runs (App Insights): az monitor app-insights query --apps ${FUNCTION_APP_NAME/func/ai} --resource-group ${RESOURCE_GROUP} --analytics-query "traces | where timestamp > ago(30m) | order by timestamp desc | take 50" --output table"
+echo "    - Monitor runs (App Insights): az monitor app-insights query --apps ${FUNCTION_APP_NAME/func/ai} --resource-group ${RESOURCE_GROUP} --analytics-query 'traces | where timestamp > ago(30m) | order by timestamp desc | take 50' --output table"
 echo "    - View logs: az monitor app-insights query ..."
 echo ""
 echo "  To run integration tests:"

@@ -24,6 +24,12 @@ param deployerPrincipalId string = ''
 @description('Set to false to disable Mistral OCR — ADI handles all pages')
 param ocrEnabled string = 'false'
 
+@description('Set to false to skip vision-based figure understanding')
+param figureUnderstandingEnabled string = 'true'
+
+@description('Vision-capable model deployment used to describe figures')
+param figureUnderstandingModel string = 'gpt-4o-mini'
+
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
 var functionAppName    = '${baseName}-func'
@@ -83,6 +89,8 @@ module functions './modules/functions.bicep' = {
     searchEndpoint: 'https://${searchServiceName}.search.windows.net'
     searchIndex: searchIndex
     ocrEnabled: ocrEnabled
+    figureUnderstandingEnabled: figureUnderstandingEnabled
+    figureUnderstandingModel: figureUnderstandingModel
   }
 }
 
