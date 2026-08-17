@@ -1,13 +1,20 @@
 #!/usr/bin/env python
 """demo.py — drive the figure-understanding demo without live CLI typing.
 
+Every command takes either a local file path or the name of a blob already in
+the `documents` container, so portal uploads work too.
+
 Usage:
-  .venv/bin/python scripts/demo.py upload <file.pdf>   # ingest and follow the run
-  .venv/bin/python scripts/demo.py watch <file.pdf>    # follow an in-flight run
-  .venv/bin/python scripts/demo.py show <file.pdf>     # figures.json / understanding / chunks
-  .venv/bin/python scripts/demo.py crop <file.pdf> <page> <fig>   # save a crop locally
-  .venv/bin/python scripts/demo.py ask "question"      # grounded Q&A over the index
-  .venv/bin/python scripts/demo.py figures "query"     # visual retrieval only
+  .venv/bin/python scripts/demo.py ls                   # what's in documents/
+  .venv/bin/python scripts/demo.py upload <file.pdf>    # fast upload, then follow the run
+  .venv/bin/python scripts/demo.py watch <file|blob>    # follow a run (waits for it to appear)
+  .venv/bin/python scripts/demo.py show  <file|blob>    # figures.json / understanding / chunks
+  .venv/bin/python scripts/demo.py crop  <file|blob> <page> <fig>
+  .venv/bin/python scripts/demo.py ask "question"       # grounded Q&A over the index
+  .venv/bin/python scripts/demo.py figures "query"      # visual retrieval only
+
+Uploading via the Azure portal? Start this first — it waits for the blob:
+  .venv/bin/python scripts/demo.py watch myfile.pdf
 """
 
 from __future__ import annotations
@@ -90,14 +97,70 @@ def _read_json(path: str):
         return None
 
 
+def _resolve(target: str) -> str:
+    """Accept a local path OR the name of a blob already in `documents`.
+
+    Returns the doc_id. Portal uploads have no local file, so fall back to the
+    same reverse name-index the delete trigger uses.
+    """
+    if os.path.isfile(target):
+        return _doc_id(target)
+
+    name = os.path.basename(target)
+    key = hashlib.sha256(name.encode()).hexdigest()[:32]
+    container = _blobs().get_container_client("processing")
+    try:
+        return container.get_blob_client(f"_name-index/{key}.txt").download_blob().readall().decode().strip()
+    except Exception:
+        pass
+
+    # Not indexed yet (pipeline still starting) — hash the uploaded blob itself.
+    try:
+        data = _blobs().get_blob_client("documents", name).download_blob().readall()
+        return hashlib.sha256(data).hexdigest()[:16]
+    except Exception:
+        raise SystemExit(
+            f"Could not resolve '{target}'.\n"
+            f"  Not a local file, and no blob named '{name}' in the documents container.\n"
+            f"  Run: demo.py ls"
+        )
+
+
 # ── Commands ──────────────────────────────────────────────────────────────
+def cmd_ls(*_: str) -> None:
+    """List what is currently in the documents container."""
+    container = _blobs().get_container_client("documents")
+    blobs = sorted(container.list_blobs(), key=lambda b: b.name)
+    if not blobs:
+        print(f"{YELLOW}documents container is empty.{RESET}")
+        return
+    print(f"\n{BOLD}documents container{RESET}")
+    for b in blobs:
+        mb = (b.size or 0) / 1_048_576
+        print(f"  {b.name:<52} {DIM}{mb:>7.1f} MB  {b.last_modified:%Y-%m-%d %H:%M}{RESET}")
+    print()
+
+
 def cmd_upload(path: str) -> None:
+    if not os.path.isfile(path):
+        raise SystemExit(f"No such file: {path}")
     name = os.path.basename(path)
+    size = os.path.getsize(path)
     doc_id = _doc_id(path)
-    print(f"{BOLD}Uploading{RESET} {name}  →  doc_id {CYAN}{doc_id}{RESET}")
+    print(f"{BOLD}Uploading{RESET} {name} ({size/1_048_576:.1f} MB)  →  doc_id {CYAN}{doc_id}{RESET}")
+
+    started = time.time()
     with open(path, "rb") as fh:
-        _blobs().get_blob_client("documents", name).upload_blob(fh, overwrite=True)
-    print(f"{GREEN}Uploaded.{RESET} Event Grid will trigger the pipeline.\n")
+        _blobs().get_blob_client("documents", name).upload_blob(
+            fh,
+            overwrite=True,
+            max_concurrency=8,        # parallel block upload — the actual speedup
+            timeout=600,
+        )
+    elapsed = time.time() - started
+    rate = (size / 1_048_576) / elapsed if elapsed else 0
+    print(f"{GREEN}Uploaded in {elapsed:.1f}s{RESET} ({rate:.1f} MB/s). "
+          f"Event Grid will trigger the pipeline.\n")
     cmd_watch(path)
 
 
@@ -114,9 +177,29 @@ STEPS = [
 
 
 def cmd_watch(path: str, timeout: int = 1800) -> None:
-    doc_id = _doc_id(path)
-    seen: set[str] = set()
     started = time.time()
+
+    # Portal upload may not have landed yet — poll for the blob before resolving.
+    if not os.path.isfile(path):
+        name = os.path.basename(path)
+        waited = False
+        while time.time() - started < timeout:
+            try:
+                _blobs().get_blob_client("documents", name).get_blob_properties()
+                break
+            except Exception:
+                if not waited:
+                    print(f"{YELLOW}Waiting for '{name}' to appear in documents/ …{RESET} "
+                          f"{DIM}(upload it now){RESET}")
+                    waited = True
+                time.sleep(3)
+        else:
+            raise SystemExit(f"Timed out waiting for '{name}'.")
+        if waited:
+            print(f"{GREEN}Blob detected.{RESET}\n")
+
+    doc_id = _resolve(path)
+    seen: set[str] = set()
     print(f"{DIM}Watching processing/{doc_id}/ …{RESET}\n")
     while time.time() - started < timeout:
         prefix = _run_prefix(doc_id)
@@ -141,7 +224,7 @@ def cmd_watch(path: str, timeout: int = 1800) -> None:
 
 
 def cmd_show(path: str) -> None:
-    doc_id = _doc_id(path)
+    doc_id = _resolve(path)
     prefix = _run_prefix(doc_id)
     if not prefix:
         print("No run found. Upload it first.")
@@ -181,7 +264,7 @@ def cmd_show(path: str) -> None:
 
 
 def cmd_crop(path: str, page: str, fig: str) -> None:
-    doc_id = _doc_id(path)
+    doc_id = _resolve(path)
     prefix = _run_prefix(doc_id)
     blob = f"{prefix}/figures/p{page}-fig{fig}.png"
     out = f"/tmp/p{page}-fig{fig}.png"
@@ -257,13 +340,14 @@ def cmd_ask(question: str) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2 or (len(sys.argv) < 3 and sys.argv[1] != "ls"):
         print(__doc__)
         sys.exit(1)
     cmd, args = sys.argv[1], sys.argv[2:]
     {
         "upload": cmd_upload, "watch": cmd_watch, "show": cmd_show,
         "crop": cmd_crop, "ask": cmd_ask, "figures": cmd_figures,
+        "ls": cmd_ls,
     }[cmd](*args)
 
 

@@ -92,23 +92,53 @@ If that prints a qualification summary, you're ready.
 
 ## Act 1 — Ingest (~2 min)
 
-Upload a third document live so the audience sees the pipeline run, while the
-two already-indexed docs guarantee the later acts work regardless.
+Upload a document live so the audience sees the pipeline run, while the
+already-indexed docs guarantee the later acts work regardless.
 
-> Filenames become the `source_file` shown in every citation, so the demo corpus
-> uses neutral names (`doc1`…`doc4`). Regenerate it from your own PDFs with the
-> *Preparing the corpus* step below.
+### Option A — upload from the CLI (fastest)
 
 ```bash
 .venv/bin/python scripts/demo.py upload $CORPUS/doc4.pdf
 ```
 
-**Short on time or want a guaranteed-fast run?** Use the 1-page extract instead
-(~60–90 s, still exercises 4A/4C):
+Uploads with 8 parallel blocks (much faster than the portal for large PDFs),
+prints the throughput, then immediately follows the run.
+
+**Short on time?** A 1-page extract completes in ~60–90 s and still exercises
+4A/4C end-to-end:
 
 ```bash
 .venv/bin/python scripts/demo.py upload $CORPUS/doc3.pdf
 ```
+
+### Option B — upload from the Azure portal
+
+If you'd rather show the portal (it makes "just drop a file in blob storage"
+concrete), start the watcher **first** — it waits for the blob to appear:
+
+```bash
+.venv/bin/python scripts/demo.py watch mydoc.pdf
+```
+
+```
+Waiting for 'mydoc.pdf' to appear in documents/ … (upload it now)
+```
+
+Then upload via **Storage account `docintv2devst` → Containers → `documents`
+→ Upload**. The watcher detects the blob and starts streaming steps.
+
+> Upload into **`documents`**, not `processing` — only `documents` has the
+> ingest Event Grid subscription.
+
+Every command accepts either a local path or a blob name, so after a portal
+upload you can still run `show`, `crop`, and the rest by name:
+
+```bash
+.venv/bin/python scripts/demo.py ls              # what's in the container
+.venv/bin/python scripts/demo.py show mydoc.pdf  # no local file needed
+```
+
+---
 
 Drop the PDF in a blob container — that's the entire integration surface.
 Event Grid fires, a Durable Functions orchestration takes over, and each step
@@ -390,13 +420,18 @@ az storage blob upload-batch --account-name docintv2devst -d documents -s "$CORP
 ## Reference
 
 ```bash
-demo.py upload <pdf>          # ingest + stream step results
-demo.py watch  <pdf>          # follow an in-flight run
-demo.py show   <pdf>          # qualification, understanding record, chunks
-demo.py crop   <pdf> <pg> <n> # save a crop to /tmp
-demo.py ask    "question"     # grounded Q&A with cited figure sources
-demo.py figures "query"       # visual retrieval only
+demo.py ls                        # list the documents container
+demo.py upload <pdf>              # fast parallel upload + stream step results
+demo.py watch  <pdf|blob-name>    # follow a run; waits if the blob isn't there yet
+demo.py show   <pdf|blob-name>    # qualification, understanding record, chunks
+demo.py crop   <pdf|blob-name> <pg> <n>   # save a crop to /tmp
+demo.py ask    "question"         # grounded Q&A with cited figure sources
+demo.py figures "query"           # visual retrieval only
 ```
+
+`<pdf|blob-name>` — a local path, or the name of a blob already in `documents`
+(resolved via the same reverse name-index the delete trigger uses). That means
+portal-uploaded files work without a local copy.
 
 Overridable: `DEMO_STORAGE`, `DEMO_SEARCH`, `DEMO_INDEX`, `DEMO_AOAI`,
 `DEMO_CHAT_MODEL`, `DEMO_EMBED_MODEL`.
