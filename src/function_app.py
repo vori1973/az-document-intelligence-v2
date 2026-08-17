@@ -19,6 +19,8 @@ from activities.step1_preanalysis import step1_preanalysis_main
 from activities.step2_adi import step2_adi_main
 from activities.step3_router import step3_router_main
 from activities.step4_ocr import extract_page_main, ocr_page_main
+from activities.step4a_figures import step4a_figures_main
+from activities.step4c_understanding import step4c_understanding_main
 from activities.step5_chunks import step5_chunks_main
 from activities.step6_embed import step6_embed_main
 from activities.step7_search import step7_search_main
@@ -78,6 +80,16 @@ def extract_page(ctx: dict) -> str:
 @app.activity_trigger(input_name="ctx")
 def ocr_page(ctx: dict) -> dict:
     return ocr_page_main(ctx)
+
+
+@app.activity_trigger(input_name="ctx")
+def step4a_figures(ctx: dict) -> dict:
+    return step4a_figures_main(ctx)
+
+
+@app.activity_trigger(input_name="ctx")
+def step4c_understanding(ctx: dict) -> dict:
+    return step4c_understanding_main(ctx)
 
 
 @app.activity_trigger(input_name="ctx")

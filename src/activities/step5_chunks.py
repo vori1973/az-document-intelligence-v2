@@ -534,17 +534,32 @@ def _build_figure_chunks(
     doc_id: str,
     blob_name: str,
     run_id: str,
+    understanding_by_key: dict[tuple[int, int], dict] | None = None,
 ) -> list[RagChunk]:
+    """Build one chunk per figure.
+
+    When step4C understanding is available, the verbalized description and
+    keywords become the embedded text so the figure is retrievable by what it
+    shows rather than only by its caption. The ADI caption, page, and polygon
+    are always preserved — vision output is additive, never authoritative.
+    """
+    understanding_by_key = understanding_by_key or {}
     chunks: list[RagChunk] = []
     for page_result in adi_page_results:
         for fig in page_result.figures:
-            text = f"[Figure] {fig.caption or ''} (Page {fig.page_number})".strip()
+            record = understanding_by_key.get((fig.page_number, fig.figure_index))
+
+            # A confident "not meaningful" verdict drops the chunk entirely.
+            if record and record.get("routing_outcome") == "reject":
+                continue
+
+            text = _figure_text(fig, record)
             chunk_id = hashlib.sha256(
                 f"{doc_id}-fig-{fig.figure_index}-p{fig.page_number}".encode()
             ).hexdigest()[:32]
 
-            # Use ADI-fetched image if available, otherwise OCR image
-            image_blob = fig.adi_image_blob
+            # Prefer the step4A tight crop, then an ADI-fetched image.
+            image_blob = (record or {}).get("tight_crop_uri") or fig.adi_image_blob
             if not image_blob:
                 image_blob = f"p{fig.page_number}-adi-fig-0.jpeg"
 
@@ -563,6 +578,42 @@ def _build_figure_chunks(
                 ),
             ))
     return chunks
+
+
+def _figure_text(fig, record: dict | None) -> str:
+    """Compose the embedded text for a figure chunk.
+
+    Without vision output this degrades to the previous caption-only form, so
+    the pipeline still works when figure understanding is disabled.
+    """
+    caption = (fig.caption or "").strip()
+    base = f"[Figure] {caption} (Page {fig.page_number})".strip()
+
+    understanding = (record or {}).get("understanding")
+    if not understanding:
+        return base
+
+    parts = ["[Figure]"]
+    if caption:
+        parts.append(caption)
+
+    description = (understanding.get("short_description") or "").strip()
+    if description:
+        parts.append(description)
+
+    for field in ("visible_labels", "device_or_component_terms",
+                  "procedure_actions", "warnings_or_constraints",
+                  "search_keywords"):
+        values = [v.strip() for v in (understanding.get(field) or []) if v and v.strip()]
+        if values:
+            parts.append(f"{field.replace('_', ' ').title()}: {', '.join(values)}")
+
+    category = understanding.get("category")
+    if category and category != "unknown":
+        parts.append(f"Category: {category}")
+
+    parts.append(f"(Page {fig.page_number})")
+    return " ".join(parts)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -594,7 +645,18 @@ def step5_chunks_main(ctx: dict) -> dict:
             adi_raw, doc_id, blob_name, mistral_markdown, adi_page_results
         )
         para_chunks = _build_paragraph_chunks(adi_raw, doc_id, blob_name, table_labels)
-        figure_chunks = _build_figure_chunks(adi_page_results, doc_id, blob_name, run_id)
+        # Figure understanding is optional: absent artifact means step4C was
+        # disabled or found nothing, and figure chunks fall back to captions.
+        understanding_by_key: dict[tuple[int, int], dict] = {}
+        try:
+            for record in download_json_artifact(doc_id, run_id, "figure-understanding.json"):
+                understanding_by_key[(record["page"], record["figure_index"])] = record
+        except Exception:
+            logger.info("[step5] No figure understanding artifact; using captions only")
+
+        figure_chunks = _build_figure_chunks(
+            adi_page_results, doc_id, blob_name, run_id, understanding_by_key
+        )
 
         all_chunks = table_chunks + para_chunks + figure_chunks
 

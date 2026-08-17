@@ -115,6 +115,48 @@ class RagChunk(BaseModel):
     embedding: Optional[list[float]] = None
 
 
+# ── Step 4A / 4B — figure candidates ──────────────────────────────────────
+
+
+class FigureFeatures(BaseModel):
+    """Geometric signals used for filtering, routing, and diagnostics.
+
+    These are never embedded as semantic content — they exist to explain and
+    reproduce routing decisions.
+    """
+
+    width_ratio: float
+    height_ratio: float
+    area_ratio: float
+    aspect_ratio: float
+    header_overlap_ratio: float = 0.0
+    footer_overlap_ratio: float = 0.0
+    normalized_position_group: str = ""
+
+
+class FigureCandidate(BaseModel):
+    """One ADI figure region, qualified by deterministic rules (steps 4A/4B).
+
+    ADI stays the citation authority: page and bounding_polygon are copied
+    from ADI unchanged and are never derived from the vision model.
+    """
+
+    document_id: str
+    source_file: Optional[str] = None
+    page: int
+    figure_index: int
+    figure_id: str
+    bounding_polygon: list[float] = Field(default_factory=list)
+    caption: Optional[str] = None
+    page_width: float = 0.0
+    page_height: float = 0.0
+    tight_crop_uri: Optional[str] = None
+    status: Literal["candidate", "rejected"] = "candidate"
+    rejection_reason: Optional[str] = None
+    routing_signals: list[str] = Field(default_factory=list)
+    features: Optional[FigureFeatures] = None
+
+
 # ── Pipeline aggregate ────────────────────────────────────────────────────
 
 

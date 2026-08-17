@@ -5,6 +5,7 @@ Activity sequence:
   step1_preanalysis → step2_adi → step3_router →
     [fan-out] extract_page × N (parallel) →
     [fan-out] ocr_page × N (parallel, capped) →
+  step4a_figures → step4c_understanding (conditional) →
   step5_chunks → step6_embed → step7_search
 
 Each activity reads its inputs from Blob artifacts written by the previous step.
@@ -16,6 +17,7 @@ Retry policy: 3 retries with exponential backoff on transient failures.
 from __future__ import annotations
 
 import logging
+import os
 
 import azure.durable_functions as df
 
@@ -27,6 +29,10 @@ RETRY_POLICY = df.RetryOptions(
 )
 
 OCR_BATCH_SIZE = 5  # max concurrent Mistral OCR calls (rate limit guard)
+
+FIGURE_UNDERSTANDING_ENABLED = (
+    os.environ.get("FIGURE_UNDERSTANDING_ENABLED", "true").lower() == "true"
+)
 
 
 def pipeline_orchestrator(context: df.DurableOrchestrationContext):
@@ -78,6 +84,19 @@ def pipeline_orchestrator(context: df.DurableOrchestrationContext):
             ]
             yield context.task_all(batch_tasks)
             all_ocr_tasks.extend(batch_tasks)
+
+    # ── Step 4A/4B: Figure candidates — crop + deterministic qualification ─
+    figures_result = yield context.call_activity_with_retry(
+        "step4a_figures", RETRY_POLICY, ctx
+    )
+
+    # ── Step 4C: One-pass figure understanding (vision) ──────────────────
+    # Skipped entirely when nothing survived deterministic filtering, so a
+    # document with no meaningful figures costs no vision calls.
+    if FIGURE_UNDERSTANDING_ENABLED and figures_result.get("qualified", 0) > 0:
+        yield context.call_activity_with_retry(
+            "step4c_understanding", RETRY_POLICY, ctx
+        )
 
     # ── Step 5: Build RAG chunks (table_row / paragraph / figure) ────────
     yield context.call_activity_with_retry(
