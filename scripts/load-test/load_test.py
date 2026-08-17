@@ -71,6 +71,25 @@ def parse_args() -> argparse.Namespace:
                         help="Disable vector perturbation. By default a tiny noise (~0.001) is added to each query vector to bust Azure Search's query cache and produce realistic load.")
     parser.add_argument("--retry-total", type=int, default=3,
                         help="SDK retry attempts on transient errors (503). Set to 0 to disable retries and surface 503s as real errors in results.")
+    parser.add_argument("--expensive", action="store_true",
+                        help="Simulate large-index query cost: raises k_nearest_neighbors to 500 and top to 50. "
+                             "Forces deep HNSW graph traversal so each query consumes ~10-100x more CPU, "
+                             "reproducing 429 throttling without needing a 16GB index.")
+    parser.add_argument("--k", type=int, default=None,
+                        help="Override k_nearest_neighbors (HNSW traversal depth). "
+                             "LangChain default is 4; production RAG setups often use 50–100. "
+                             "Higher k = deeper graph traversal = more CPU per query. "
+                             "Ignored when --expensive is set (which forces k=500).")
+    parser.add_argument("--top", type=int, default=None,
+                        help="Override the number of results returned (top N). "
+                             "Defaults to match --k when set, otherwise 5. "
+                             "Ignored when --expensive is set (which forces top=50).")
+    parser.add_argument("--oversampling", type=int, default=None,
+                        help="Multiply k_nearest_neighbors internally before applying filters. "
+                             "Azure Search fetches k × oversampling HNSW candidates, then "
+                             "filters/reranks down to k results. "
+                             "Customer default is 20 (k=50 → 1,000 internal candidates). "
+                             "Omit to use the service default (no oversampling).")
     return parser.parse_args()
 
 
@@ -117,55 +136,56 @@ async def build_search_request(
     semantic_config: str,
     capture: bool = False,
     perturb: bool = True,
+    expensive: bool = False,
+    k: int = 5,
+    top: int = 5,
+    oversampling: int | None = None,
 ) -> tuple[int, float, list | None]:
     """
     Issue one search request and return (http_status_code, latency_ms, docs).
     docs is a list of result dicts when capture=True, else None.
     Status 429 is counted but not raised.
     perturb=True adds tiny noise to the query vector to bust the search cache.
+    expensive=True overrides k=500, top=50 to simulate large-index query cost.
+    k controls k_nearest_neighbors (HNSW traversal depth); top controls result count.
+    oversampling multiplies the internal candidate set (k × oversampling fetched from HNSW).
     """
     vector = perturb_vector(query["vector"]) if perturb else query["vector"]
     text = query["text"]
+    if expensive:
+        k = 500
+        top = 50
+
+    def _vq(**extra):
+        return VectorizedQuery(
+            vector=vector,
+            k_nearest_neighbors=k,
+            fields="embedding",
+            oversampling=oversampling,
+            **extra,
+        )
 
     t0 = time.monotonic()
     try:
         if profile == "vector":
             results = await client.search(
                 search_text=None,
-                vector_queries=[
-                    VectorizedQuery(
-                        vector=vector,
-                        k_nearest_neighbors=5,
-                        fields="embedding",
-                    )
-                ],
-                top=5,
+                vector_queries=[_vq()],
+                top=top,
             )
         elif profile == "hybrid":
             results = await client.search(
                 search_text=text,
-                vector_queries=[
-                    VectorizedQuery(
-                        vector=vector,
-                        k_nearest_neighbors=5,
-                        fields="embedding",
-                    )
-                ],
-                top=5,
+                vector_queries=[_vq()],
+                top=top,
             )
         else:  # semantic
             results = await client.search(
                 search_text=text,
-                vector_queries=[
-                    VectorizedQuery(
-                        vector=vector,
-                        k_nearest_neighbors=5,
-                        fields="embedding",
-                    )
-                ],
+                vector_queries=[_vq()],
                 query_type="semantic",
                 semantic_configuration_name=semantic_config,
-                top=5,
+                top=top,
             )
 
         docs = []
@@ -238,12 +258,17 @@ async def run_worker(
     counters: dict,
     log_state: dict | None = None,
     perturb: bool = True,
+    expensive: bool = False,
+    k: int = 5,
+    top: int = 5,
+    oversampling: int | None = None,
 ) -> None:
     while time.monotonic() < end_time:
         query = random.choice(query_bank)
         capture = log_state is not None
         status, latency_ms, docs = await build_search_request(
-            client, query, profile, semantic_config, capture=capture, perturb=perturb
+            client, query, profile, semantic_config, capture=capture, perturb=perturb,
+            expensive=expensive, k=k, top=top, oversampling=oversampling,
         )
         results_list.append((status, latency_ms))
         counters["total"] += 1
@@ -320,7 +345,10 @@ def run_dir(started_at: datetime, args: argparse.Namespace) -> Path:
     return RESULTS_DIR / f"{ts}_c{args.concurrency}_{args.profile}_r{args.replicas}"
 
 
-def write_results(args: argparse.Namespace, stats: dict, started_at: datetime) -> Path:
+def write_results(
+    args: argparse.Namespace, stats: dict, started_at: datetime,
+    k: int = 5, top: int = 5, oversampling: int | None = None,
+) -> Path:
     out_dir = run_dir(started_at, args)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "summary.json"
@@ -330,6 +358,9 @@ def write_results(args: argparse.Namespace, stats: dict, started_at: datetime) -
         "profile": args.profile,
         "replicas": args.replicas,
         "duration_s": args.duration,
+        "k_nearest_neighbors": k,
+        "top": top,
+        **({"oversampling": oversampling} if oversampling is not None else {}),
         **stats,
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -361,10 +392,27 @@ async def run_load_test(args: argparse.Namespace) -> None:
     print(f"  Replicas:    {args.replicas} (label only)")
     print(f"  Query bank:  {len(query_bank)} queries")
     perturb = not args.no_perturb
+
+    # Resolve effective k and top values
+    if args.expensive:
+        effective_k = 500
+        effective_top = 50
+    else:
+        effective_k = args.k if args.k is not None else 5
+        effective_top = args.top if args.top is not None else effective_k
+
     if args.log_requests:
         print(f"  Log mode:    per-request JSONL enabled")
     print(f"  Cache-bust:  {'disabled (--no-perturb)' if not perturb else 'ON — tiny noise added to each query vector'}")
     print(f"  Retries:     {args.retry_total} ({'SDK default — 503s silently retried' if args.retry_total > 0 else 'disabled — 503s surface as errors'})")
+    if args.expensive:
+        print(f"  Expensive:   ON — k=500, top=50 (simulates large-index query cost)")
+    else:
+        print(f"  k_nearest:   {effective_k}  (LangChain default=4; production often 50–100)")
+        print(f"  top:         {effective_top}")
+    if args.oversampling is not None:
+        effective_candidates = effective_k * args.oversampling
+        print(f"  oversampling:{args.oversampling}  (internal candidates: {effective_k} × {args.oversampling} = {effective_candidates})")
     print()
 
     started_at = datetime.now(timezone.utc)
@@ -417,6 +465,7 @@ async def run_load_test(args: argparse.Namespace) -> None:
                 run_worker(
                     i, client, query_bank, args.profile, semantic_config,
                     end_time, raw_results, counters, log_state, perturb,
+                    args.expensive, effective_k, effective_top, args.oversampling,
                 )
                 for i in range(args.concurrency)
             ]
@@ -426,7 +475,7 @@ async def run_load_test(args: argparse.Namespace) -> None:
                 log_fh.close()
 
     stats = aggregate_results(raw_results, args.duration)
-    out_dir = write_results(args, stats, started_at)
+    out_dir = write_results(args, stats, started_at, k=effective_k, top=effective_top, oversampling=args.oversampling)
 
     print()
     print("=== Results ===")

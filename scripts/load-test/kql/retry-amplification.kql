@@ -1,0 +1,70 @@
+// retry-amplification.kql
+// Detect SDK retry bursts: same client IP sending multiple 503s within a short time window.
+//
+// WHY THIS MATTERS
+//   The Azure SDK default retry policy (retry_total=3) silently retries 503s up to 3 times.
+//   From the service perspective each retry is an identical new HTTP request — there is no
+//   retry flag in AzureDiagnostics. Retrying a CPU-saturated node does not help; it adds
+//   load and extends the saturation for all clients.
+//
+//   Example from load testing the same service:
+//     --retry-total=3  →  992 app-level calls,  169 503s visible  (17%) — retries masked many
+//     --retry-total=0  →  956 app-level calls,  266 503s visible  (27.8%) — raw first-attempt rate
+//
+//   The 17% figure is misleading: those 169 "final" 503s each fired 3 additional requests,
+//   meaning ~676 HTTP calls hit the already-saturated node just from retries.
+//
+// HOW THIS QUERY WORKS
+//   503 events are grouped by client IP in 3-second windows. If the same client produces
+//   more than one 503 within that window, it is almost certainly a retry burst rather than
+//   independent concurrent queries. The output shows:
+//
+//     client_ip        — source IP of the caller (clientIP_s field)
+//     total_503s       — total 503 HTTP calls from this client
+//     retry_bursts     — number of 3s windows with >1 503 (burst count)
+//     solo_503s        — 3s windows with exactly one 503 (likely first attempts)
+//     avg_burst_size   — average 503s per burst window (≈ effective retry factor)
+//     max_burst_size   — largest single burst (cap = retry_total + 1)
+//
+// INTERPRETING avg_burst_size
+//   avg_burst_size ≈ 1.0   → client retries are disabled or succeeding on first retry
+//   avg_burst_size ≈ 2–3   → partial retries — service recovering mid-burst
+//   avg_burst_size ≈ 4.0   → all retries exhausted (retry_total=3, all four attempts fail)
+//                             this is the worst case: client is amplifying load ~4×
+//
+// PREREQUISITE
+//   clientIP_s must be present in AzureDiagnostics. This field is populated when the
+//   diagnostic setting includes OperationLogs sent to a Log Analytics workspace.
+//   If clientIP_s is absent in your workspace, the query returns one row with client_ip = "".
+//   In that case use retry-amplification-noip.kql (time-window-only variant).
+
+AzureDiagnostics
+| where TimeGenerated > ago(1h)
+| where ResourceProvider == "MICROSOFT.SEARCH"
+| where OperationName startswith "Query."
+| extend
+    sig_d = todouble(column_ifexists("resultSignature_d", real(null))),
+    sig_s = tostring(column_ifexists("resultSignature_s", ""))
+| where sig_d == 503 or sig_s == "503"
+| extend client_ip = tostring(column_ifexists("clientIP_s", ""))
+// Group into 3-second buckets per client — SDK retries fire within ~1-2s of each other
+| summarize
+    burst_503s = count()
+    by client_ip, bin(TimeGenerated, 3s)
+// Roll up per client across all burst windows
+| summarize
+    total_503s     = sum(burst_503s),
+    retry_bursts   = countif(burst_503s > 1),
+    solo_503s      = countif(burst_503s == 1),
+    avg_burst_size = round(avg(burst_503s), 2),
+    max_burst_size = max(burst_503s)
+    by client_ip
+| extend
+    // Estimated application-level failures: solo_503s are first attempts,
+    // retry_bursts are collapsed retry sequences (1 app call per burst).
+    est_app_failures  = solo_503s + retry_bursts,
+    // Amplification: how many HTTP 503s per distinct application failure
+    amplification_factor = round(todouble(total_503s) / todouble(solo_503s + retry_bursts), 2)
+| project client_ip, total_503s, retry_bursts, solo_503s, avg_burst_size, max_burst_size,
+          est_app_failures, amplification_factor
+| order by total_503s desc

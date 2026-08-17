@@ -52,14 +52,48 @@ in Log Analytics. The `AzureDiagnostics` table will contain rows with
 Open Log Analytics in the Azure Portal (**Monitor** > **Log Analytics workspaces** >
 select your workspace > **Logs**), then paste and run the queries from this directory:
 
-| File                   | Purpose                                                    |
-|------------------------|------------------------------------------------------------|
-| `throttling.kql`       | 429 throttle rate grouped by 5-minute window               |
-| `latency.kql`          | p50/p95/p99 latency trend by 5-minute window               |
-| `saturation.kql`       | QPS plateau + latency climb — replica saturation pattern (1-min bins) |
-| `semantic-impact.kql`  | Before/after latency comparison when semantic ranker is enabled |
+| File                        | Purpose                                                                  |
+|-----------------------------|--------------------------------------------------------------------------|
+| `throttling.kql`            | 429 + 503 error rate by 5-min window; includes `est_unique_503s` to account for SDK retry amplification |
+| `retry-amplification.kql`   | Detect SDK retry bursts per client IP — shows how many HTTP 503s each application failure generates |
+| `latency.kql`               | p50/p95/p99 latency trend by 5-minute window                             |
+| `saturation.kql`            | QPS plateau + latency climb — replica saturation pattern (1-min bins)    |
+| `semantic-impact.kql`       | Before/after latency comparison when semantic ranker is enabled           |
 
 Set the **Time range** to cover your load test window.
+
+---
+
+## SDK Retry Amplification and 503s
+
+When the service returns 503, the Azure SDK default retry policy (`retry_total=3`) silently
+retries up to 3 times. Each retry is a full new HTTP request — the service cannot distinguish
+a retry from a fresh query. This has two consequences:
+
+1. **AzureDiagnostics overstates failures.** The `errors_503` count includes all retry attempts.
+   With `retry_total=3`, a single application failure generates up to 4 rows in the log.
+   `throttling.kql` includes `est_unique_503s = errors_503 / retry_factor` to correct for this.
+
+2. **Retries make saturation worse.** A node that is CPU-saturated cannot serve the retry faster
+   than it rejected the original. Each retry adds CPU pressure, worsening 503s for other clients.
+
+Example observed during load testing the same service:
+
+```
+--retry-total=3  →  992 app calls,  169 503s (17%)  — retries masked many failures
+--retry-total=0  →  956 app calls,  266 503s (27.8%) — raw first-attempt failure rate
+
+The 169 "final" 503s with retry=3 each fired 3 additional HTTP requests:
+~676 retry calls hitting the saturated node on top of the original failures.
+```
+
+Run `retry-amplification.kql` to see the burst pattern per client IP and measure the
+effective amplification factor in your environment. `avg_burst_size ≈ 4` means all retries
+are exhausting — the node is fully saturated and retrying is making it worse.
+
+**Recommendation:** while a service is in a 503-saturated state, disable SDK retries
+(`retry_total=0`) and implement application-level backoff with jitter instead. Fail fast
+rather than amplifying load on an already overloaded node.
 
 ---
 

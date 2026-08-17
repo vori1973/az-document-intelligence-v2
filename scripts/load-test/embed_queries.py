@@ -86,6 +86,60 @@ QUERIES = [
     "adductor canal block technique for knee surgery",
     "perioperative opioid reduction protocol joint replacement",
     "tranexamic acid dosing to reduce blood loss in TKA",
+    # Hip arthroplasty
+    "total hip arthroplasty surgical approach options",
+    "acetabular cup positioning and abduction angle guidelines",
+    "femoral stem sizing and offset selection in THA",
+    "dual mobility cup indications for hip instability",
+    "hip dislocation prevention protocol after total hip replacement",
+    # Shoulder arthroplasty
+    "total shoulder arthroplasty indications and implant selection",
+    "reverse shoulder arthroplasty technique and component placement",
+    "glenoid component fixation in anatomic shoulder replacement",
+    "rotator cuff integrity assessment prior to shoulder replacement",
+    "shoulder replacement rehabilitation milestones and restrictions",
+    # Trauma and fracture fixation
+    "intramedullary nail fixation technique for femoral shaft fracture",
+    "locking plate fixation principles for periarticular fractures",
+    "distal radius fracture fixation volar plate positioning",
+    "proximal humerus fracture classification and fixation options",
+    "tibial plateau fracture surgical planning and fixation",
+    # Sports medicine and ligament repair
+    "ACL reconstruction graft selection and fixation technique",
+    "meniscus repair versus meniscectomy decision criteria",
+    "PCL reconstruction surgical technique and rehabilitation",
+    "rotator cuff repair arthroscopic technique and suture anchor placement",
+    "Achilles tendon repair protocol and rehabilitation timeline",
+    # Bone grafting and biologics
+    "autograft versus allograft selection for bone defect reconstruction",
+    "demineralized bone matrix clinical indications and handling",
+    "platelet rich plasma application in orthopedic surgery",
+    "synthetic bone substitute properties and clinical use",
+    "bone morphogenetic protein dosing in spinal fusion",
+    # Regulatory and clinical documentation
+    "IFU instructions for use interpretation for orthopedic implants",
+    "MDR EU medical device regulation compliance requirements",
+    "FDA 510k clearance pathway for orthopedic devices",
+    "post-market surveillance requirements for joint implants",
+    "adverse event reporting obligations for implant manufacturers",
+    # OR workflow and sterile field management
+    "surgical timeout protocol and site verification checklist",
+    "sterile field maintenance during joint arthroplasty",
+    "implant tray opening and transfer technique to sterile field",
+    "intraoperative blood management strategies in orthopedic surgery",
+    "OR turnover time optimisation for high volume arthroplasty programs",
+    # Patient safety and implant recall
+    "metal on metal hip implant recall management and patient follow-up",
+    "implant lot number traceability requirements in surgical records",
+    "patient notification protocol for recalled orthopedic devices",
+    "MAUDE database adverse event search for orthopedic implants",
+    "informed consent documentation requirements for implant surgery",
+    # Imaging and preoperative planning
+    "weight bearing X-ray alignment measurement for TKA planning",
+    "MRI protocol for cartilage assessment prior to knee replacement",
+    "CT scan based preoperative planning for complex revision surgery",
+    "hip to ankle alignment radiograph technique and interpretation",
+    "DEXA bone density assessment threshold for arthroplasty candidacy",
 ]
 
 OUTPUT_FILE = Path(__file__).parent / "query_bank.json"

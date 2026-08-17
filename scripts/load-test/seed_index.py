@@ -27,6 +27,17 @@ from typing import Iterator
 from azure.core.exceptions import HttpResponseError
 from azure.identity import DefaultAzureCredential
 from azure.search.documents import SearchClient
+from azure.search.documents.indexes import SearchIndexClient
+from azure.search.documents.indexes.models import (
+    HnswAlgorithmConfiguration,
+    SearchField,
+    SearchFieldDataType,
+    SearchIndex,
+    SearchableField,
+    SimpleField,
+    VectorSearch,
+    VectorSearchProfile,
+)
 
 EMBEDDING_DIMS = 1536
 DEFAULT_BATCH_SIZE = 500
@@ -53,6 +64,30 @@ def parse_args() -> argparse.Namespace:
         "--delete",
         action="store_true",
         help="Delete all synthetic chunks (id prefix 'synthetic-') instead of seeding",
+    )
+    parser.add_argument(
+        "--create-index",
+        action="store_true",
+        help=(
+            "Create the index before seeding with no vector compression (float32). "
+            "Simulates an uncompressed production index like aiadvisor-prod-index-hcc. "
+            "Fails if the index already exists."
+        ),
+    )
+    parser.add_argument(
+        "--dims",
+        type=int,
+        default=EMBEDDING_DIMS,
+        help=(
+            "Vector dimensions for --create-index. "
+            "Use 1536 (default, compatible with existing query_bank.json) or "
+            "3072 to match text-embedding-3-large (requires re-running embed_queries.py)."
+        ),
+    )
+    parser.add_argument(
+        "--delete-index",
+        action="store_true",
+        help="Drop the entire index (not just synthetic chunks). Use after load testing to clean up.",
     )
     return parser.parse_args()
 
@@ -94,6 +129,81 @@ def _handle_http_error(err: HttpResponseError, operation: str) -> None:
         sys.exit(f"\nERROR: Azure Search returned HTTP {status} while {operation}.\n{err.message}")
 
 
+def get_index_client() -> SearchIndexClient:
+    endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT")
+    if not endpoint:
+        sys.exit("ERROR: AZURE_SEARCH_ENDPOINT environment variable is not set.")
+    return SearchIndexClient(endpoint=endpoint, credential=DefaultAzureCredential())
+
+
+def create_uncompressed_index(dims: int) -> None:
+    """Create a new index with float32 vectors and no compression.
+
+    This mirrors what the customer's uncompressed indexes look like (e.g.
+    aiadvisor-prod-index-hcc: 3072-dim float32, ~12,288 bytes/chunk in the HNSW
+    graph). Even at 1536 dims (default), omitting compression makes each HNSW
+    traversal step read 6,144 bytes/chunk vs ~384 bytes for binary-quantized
+    indexes — ~16× more CPU per query.
+    """
+    index_name = os.environ.get("AZURE_SEARCH_INDEX")
+    endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT")
+    if not index_name:
+        sys.exit("ERROR: AZURE_SEARCH_INDEX environment variable is not set.")
+    if not endpoint:
+        sys.exit("ERROR: AZURE_SEARCH_ENDPOINT environment variable is not set.")
+
+    index = SearchIndex(
+        name=index_name,
+        fields=[
+            SimpleField(name="id", type=SearchFieldDataType.String, key=True),
+            SearchableField(name="text_for_embedding", type=SearchFieldDataType.String),
+            SimpleField(name="source_file", type=SearchFieldDataType.String, filterable=True),
+            SearchField(
+                name="embedding",
+                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                searchable=True,
+                vector_search_dimensions=dims,
+                vector_search_profile_name="hnsw-profile",
+            ),
+        ],
+        vector_search=VectorSearch(
+            algorithms=[HnswAlgorithmConfiguration(name="hnsw-config")],
+            profiles=[VectorSearchProfile(
+                name="hnsw-profile",
+                algorithm_configuration_name="hnsw-config",
+                # no compression_name → float32, no quantization
+            )],
+        ),
+    )
+
+    client = get_index_client()
+    try:
+        client.create_index(index)
+    except HttpResponseError as err:
+        _handle_http_error(err, f"creating index '{index_name}'")
+
+    bytes_per_chunk = dims * 4
+    print(
+        f"Created uncompressed index '{index_name}':\n"
+        f"  dims={dims}  encoding=float32  compression=none\n"
+        f"  {bytes_per_chunk:,} bytes/chunk in HNSW graph  "
+        f"(vs ~{dims // 8} bytes binary-quantized — {dims * 4 // (dims // 8)}× more expensive per query)\n"
+    )
+
+
+def delete_index() -> None:
+    """Drop the entire index. Used to clean up after load testing."""
+    index_name = os.environ.get("AZURE_SEARCH_INDEX")
+    if not index_name:
+        sys.exit("ERROR: AZURE_SEARCH_INDEX environment variable is not set.")
+    client = get_index_client()
+    try:
+        client.delete_index(index_name)
+    except HttpResponseError as err:
+        _handle_http_error(err, f"deleting index '{index_name}'")
+    print(f"Deleted index '{index_name}'.")
+
+
 def get_search_client() -> SearchClient:
     endpoint = os.environ.get("AZURE_SEARCH_ENDPOINT")
     index = os.environ.get("AZURE_SEARCH_INDEX")
@@ -115,27 +225,21 @@ def random_unit_vector(dims: int = EMBEDDING_DIMS) -> list[float]:
     return [x / norm for x in components]
 
 
-def make_synthetic_chunk(seq: int) -> dict:
-    """Build a schema-conformant synthetic document chunk."""
-    chunk_id = f"synthetic-{uuid.uuid4().hex}"
-    doc_id = f"synthetic-doc-{seq // 10}"  # ~10 chunks per synthetic document
+def make_synthetic_chunk(seq: int, dims: int = EMBEDDING_DIMS) -> dict:
+    """Build a synthetic document chunk with only the fields common to all schemas.
+
+    Extra fields from the original document-chunks schema (type, document_id,
+    page, etc.) are omitted — they are nullable there and cause errors on the
+    minimal load-test-uncompressed schema.
+    """
     return {
-        "id": chunk_id,
-        "type": "text",
-        "source": doc_id,
+        "id": f"synthetic-{uuid.uuid4().hex}",
         "source_file": f"synthetic-document-{seq // 10}.pdf",
-        "document_id": doc_id,
-        "page": (seq % 10) + 1,
-        "table_index": None,
-        "row_index": None,
-        "figure_index": None,
-        "image_blob": None,
-        "bounding_polygon": [],
         "text_for_embedding": (
             f"Synthetic chunk {seq}. Placeholder text for load testing. "
             "Does not represent real medical device documentation."
         ),
-        "embedding": random_unit_vector(),
+        "embedding": random_unit_vector(dims),
     }
 
 
@@ -145,16 +249,16 @@ def _batches(chunks: int, batch_size: int) -> Iterator[range]:
         yield range(start, min(start + batch_size, chunks))
 
 
-def seed(client: SearchClient, chunks: int, batch_size: int) -> None:
+def seed(client: SearchClient, chunks: int, batch_size: int, dims: int = EMBEDDING_DIMS) -> None:
     """Upload synthetic chunks in batches, printing per-batch progress."""
     total_batches = math.ceil(chunks / batch_size)
     uploaded = 0
     t0 = time.monotonic()
 
-    print(f"Seeding {chunks:,} synthetic chunks in batches of {batch_size}...")
+    print(f"Seeding {chunks:,} synthetic chunks in batches of {batch_size} (dims={dims})...")
 
     for batch_num, seq_range in enumerate(_batches(chunks, batch_size), start=1):
-        docs = [make_synthetic_chunk(seq) for seq in seq_range]
+        docs = [make_synthetic_chunk(seq, dims) for seq in seq_range]
         try:
             client.upload_documents(docs)
         except HttpResponseError as err:
@@ -220,12 +324,19 @@ def delete_synthetic(client: SearchClient) -> None:
 
 def main() -> None:
     args = parse_args()
-    client = get_search_client()
 
+    if args.delete_index:
+        delete_index()
+        return
+
+    if args.create_index:
+        create_uncompressed_index(args.dims)
+
+    client = get_search_client()
     if args.delete:
         delete_synthetic(client)
     else:
-        seed(client, args.chunks, args.batch_size)
+        seed(client, args.chunks, args.batch_size, args.dims)
 
 
 if __name__ == "__main__":

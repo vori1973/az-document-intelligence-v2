@@ -1,8 +1,8 @@
 # Azure AI Search — Load Test & Advisor
 
 Educational load-testing tool for Azure AI Search (Standard tier).
-Simulates concurrent users, measures latency and throttling (HTTP 429),
-and produces actionable replica/partition recommendations.
+Simulates concurrent users, measures latency and compute saturation (HTTP 503),
+and produces actionable replica/partition/query recommendations.
 
 Designed to illustrate before/after behaviour when scaling replicas —
 without needing access to a customer environment.
@@ -19,7 +19,7 @@ without needing access to a customer environment.
 │  ["what is the VELYS procedure?", "knee implant sizing", ...]   │
 │         │                                                       │
 │         ▼  Azure OpenAI  text-embedding-ada-002                 │
-│  query_bank.json   (text + vector pairs, 20–50 queries)         │
+│  query_bank.json   (text + vector pairs, 100 queries)           │
 └─────────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -32,9 +32,9 @@ without needing access to a customer environment.
 │  Uploads directly to Azure AI Search (bypasses pipeline)        │
 │  Prefix synthetic- on all IDs → safe to delete with --delete   │
 │                                                                 │
-│  Without seeding: small dev index → zero 429s at any           │
+│  Without seeding: small dev index → zero 503s at any           │
 │  concurrency (too cheap per query to saturate a replica)        │
-│  With seeding:    realistic index size → 429s appear and        │
+│  With seeding:    realistic index size → 503s appear and        │
 │  replica scaling produces measurable latency improvement        │
 └─────────────────────────────────────────────────────────────────┘
                             │
@@ -101,7 +101,7 @@ scripts/load-test/
   query_bank.json         pre-embedded queries (gitignored)
   kql/
     README.md             how to enable diagnostics and run KQL queries
-    throttling.kql        429 rate by 5-minute window
+    throttling.kql        503 rate by 5-minute window (primary saturation signal)
     latency.kql           p50/p95/p99 latency trend
     semantic-impact.kql   before/after latency comparison for semantic ranker
   results/                raw run output (gitignored)
@@ -125,13 +125,60 @@ scripts/load-test/
 | Search units    | replicas × partitions, max 36  |
 | Min for SLA     | 2 replicas (read), 3 (r/w)     |
 
-**For this test:** sample documents fit comfortably in 1 partition.
-Only replica count is varied. Partitions are irrelevant at this data size.
+### Replicas vs Partitions — which lever to pull
 
-**How replicas help:**
-Each replica handles a share of query load independently.
-Adding replicas increases QPS capacity and reduces latency under load —
-it does not increase storage or index size.
+These solve different problems and are priced identically (1 SU each):
+
+```
+Replicas                              Partitions
+──────────────────────────────        ──────────────────────────────
+More concurrent queries               Smaller HNSW graph per shard
+Each replica processes full index     Query fans out to all shards → merge
+→ fixes QPS ceiling (reduces 503s)    → fixes per-query cost / latency
+→ does NOT reduce latency per query   → does NOT increase concurrency alone
+```
+
+**For vector search on large indexes**, partitions matter because they shard the
+HNSW graph. With 2 partitions a 400K-doc index becomes two 200K-doc shards;
+each shard's traversal cost is roughly halved and the two shards run in parallel.
+
+**Cost parity example** (S1, both options = 4 SUs = same price):
+
+```
+1 partition × 4 replicas:  4× concurrency, same per-query cost
+2 partitions × 2 replicas: 2× concurrency, ~½ per-query cost  ← better for 503 pattern
+```
+
+The minimum viable production config is 2 replicas × 1 partition (2 SUs) — this
+covers the read SLA. Everything beyond that is tuning for load.
+
+For a customer hitting 503s at low concurrency (expensive queries, not volume),
+`2 partitions × 2 replicas` targets the root cause and costs the same as
+`1 partition × 4 replicas`.
+
+### Right sequence for a 400K-doc S1 index
+
+```
+Step 1  Set minimum 2 replicas         always — required for read SLA (99.9%)
+                                        1 replica = no SLA, no redundancy
+Step 2  Reduce k in LangChain (k=10)   free — cuts per-query CPU ~80%
+Step 3  Re-test at normal concurrency  measure new saturation threshold
+Step 4  Still slow? Add 2nd partition  target the largest indexes first
+        on the largest indexes         (446K-doc index costs ~22× more than 20K)
+        (not the small ones)           small indexes are already cheap — skip them
+Step 5  Still low QPS? Add replicas    scale concurrency on top of cheap queries
+```
+
+**Why largest indexes first for partitioning:** HNSW traversal cost scales with
+index size. Partitioning a 446K-doc index into two 223K-doc shards cuts its query
+cost in half. Partitioning a 20K-doc index saves almost nothing — it is already
+cheap. With 15 indexes, only the top 2–3 by document count likely need partitioning.
+
+Skipping step 2 means paying for replicas and partitions to run unnecessarily
+expensive queries — the wrong problem to solve with money.
+
+**For this test:** sample documents fit comfortably in 1 partition (storage is not
+the concern). Replica count is the primary variable; the k flag controls query cost.
 
 ---
 
@@ -219,9 +266,9 @@ source scripts/load-test/.env
 
 ## Step 0 — Seed the Index (optional)
 
-The load test only triggers HTTP 429 throttling if the index is large enough to
+The load test only triggers HTTP 503 errors if the index is large enough to
 saturate a replica. A small development index (a few hundred documents) costs the
-service almost nothing per query — you will see low latency and zero 429s regardless
+service almost nothing per query — you will see low latency and zero 503s regardless
 of concurrency. Use `seed_index.py` to inject synthetic chunks at realistic scale
 before load testing.
 
@@ -329,7 +376,7 @@ Queries are domain-realistic for the sample medical device documents:
 - "sports medicine implant sizing guide"
 - "knee arthroplasty contraindications"
 - "instrument sterilization requirements"
-- ... (20–30 total)
+- ... (100 total across 20 categories)
 
 To add your own queries, edit the `QUERIES` list in `embed_queries.py`.
 
@@ -352,6 +399,7 @@ To add your own queries, edit the `QUERIES` list in `embed_queries.py`.
 | `--profile`       | hybrid   | Query shape: `vector` / `hybrid` / `semantic`                    |
 | `--replicas`      | 1        | Label written to results — does not change the service           |
 | `--log-requests`  | off      | Write per-request detail to `log.jsonl` in the run directory     |
+| `--oversampling`  | none     | Internal candidate multiplier: service fetches `k × oversampling` HNSW candidates before filtering/reranking. Customer default is 20 (`k=50` → 1,000 internal candidates). |
 
 ### How concurrency and duration work
 
@@ -425,18 +473,19 @@ This is the core illustration. Run the same test at 1 replica and 3 replicas.
 ### Expected pattern
 
 ```
-Concurrency → 20 concurrent users, hybrid profile
+Concurrency → 20 concurrent users, hybrid profile, seeded index
 
 Replicas = 1                    Replicas = 3
 ────────────────────────────    ────────────────────────────
 p50  latency:  210 ms           p50  latency:   95 ms
 p95  latency:  890 ms           p95  latency:  180 ms
-429  rate:     7.4%             429  rate:      0.0%
+503  rate:     7.4%             503  rate:      0.0%
 achieved QPS:  7.5              achieved QPS:  19.1
 ```
 
 Numbers are illustrative. Actual values depend on query complexity,
-document count, and index size.
+document count, and index size. In practice with large vector indexes
+the saturation signal is always HTTP 503 (compute exhausted), not 429.
 
 ---
 
@@ -501,14 +550,165 @@ Profile = hybrid                Profile = semantic
 ────────────────────────────    ────────────────────────────
 p50  latency:   95 ms           p50  latency:  180 ms
 p95  latency:  210 ms           p95  latency:  420 ms
-429  rate:      0.0%            429  rate:      0.0%
+503  rate:      0.0%            503  rate:      0.0%
 achieved QPS:  9.2              achieved QPS:  8.1
 ```
 
 The semantic ranker adds ~100–200ms per request at low concurrency.
 Under high concurrency, the ranker has its own quota — you may see
-latency climb without 429s (ranker saturation, not replica saturation).
+latency climb without 503s (ranker saturation, not replica saturation).
 The advisor will flag this as `[SEMANTIC_QUOTA]`.
+
+---
+
+## Step 3c — Query Cost Optimisation (LangChain / high-503 scenario)
+
+Use this workflow when the customer reports 503 errors at low concurrency (< 20)
+on a large index (100K+ documents). This is a query cost problem, not a replica
+count problem — individual queries are too expensive for the replica to process.
+
+### Root cause: k_nearest_neighbors on a large HNSW graph
+
+`k_nearest_neighbors` controls how deeply the HNSW graph is traversed per query.
+LangChain passes the retriever's `k` directly to this parameter:
+
+```python
+# LangChain AzureSearch — what k actually does
+retriever = vector_store.as_retriever(search_kwargs={"k": 50})
+# → VectorizedQuery(k_nearest_neighbors=50, ...)
+# → traverses 50 candidate paths through the HNSW graph on every query
+```
+
+| k value | Index size | Relative CPU cost | Typical use |
+|---------|------------|-------------------|-------------|
+| 4       | any        | 1× (baseline)     | LangChain default (`as_retriever()`) |
+| 10      | any        | ~2.5×             | Conservative production RAG |
+| 50      | 400K docs  | ~12×              | Common "quality" override — **root cause of 503s** |
+| 100     | 400K docs  | ~25×              | Aggressive — saturates S1 at single-digit concurrency |
+
+#### Oversampling multiplies the effective traversal depth
+
+`oversampling` is an Azure Search parameter that tells the HNSW engine to fetch
+`k × oversampling` candidates internally before applying post-filters or semantic
+reranking. It is intended to ensure enough results survive a selective filter.
+
+```
+k=50, oversampling=20  →  1,000 internal HNSW candidates per query
+k=50, no oversampling  →     50 internal HNSW candidates per query
+                             ↑___ 20× cheaper
+```
+
+**When oversampling is counterproductive:** the customer uses `vectorFilterMode:
+preFilter` (the default). PreFilter applies metadata filters *before* HNSW
+traversal, narrowing the candidate pool. Oversampling is designed for
+*postFilter* — fetching extra candidates to compensate for filter attrition.
+Using `oversampling=20` with preFilter likely provides no quality benefit while
+still increasing HNSW traversal cost.
+
+**Load test command to reproduce customer query shape:**
+
+```bash
+python load_test.py --concurrency 10 --duration 60 \
+  --profile hybrid --replicas 1 --retry-total 0 \
+  --k 50 --oversampling 20
+```
+
+**With reduced k and no oversampling (recommended):**
+
+```bash
+python load_test.py --concurrency 10 --duration 60 \
+  --profile hybrid --replicas 1 --retry-total 0 \
+  --k 10
+```
+
+### Workflow
+
+```
+1. Ask the customer: what k value is your LangChain retriever using?
+   Look for: search_kwargs={"k": N} or retriever.search_kwargs
+
+2. Reproduce at their k (e.g. k=50):
+   python load_test.py --concurrency 10 --duration 60 \
+     --profile hybrid --replicas 1 --retry-total 0 --k 50
+
+3. Run at reduced k (e.g. k=10):
+   python load_test.py --concurrency 10 --duration 60 \
+     --profile hybrid --replicas 1 --retry-total 0 --k 10
+
+4. Compare:
+   python advisor.py results/
+```
+
+Use `--retry-total 0` so 503s surface as errors in results rather than being
+silently retried by the SDK. This makes the before/after difference visible.
+
+### Measured results (100K doc index, S1, 1 replica, 100 concurrent)
+
+```
+             k=50            k=10          delta
+────────────────────────────────────────────────────
+503 rate:   17.31%          3.03%          −83%
+p50:         6,796 ms       6,775 ms        ~flat
+p95:        11,684 ms      10,654 ms        −9%
+achieved QPS:  14.35          14.28         ~flat
+```
+
+**Why p50 is flat:** at 100 concurrent you are past the saturation point — latency
+is dominated by queue wait, not execution time. Reducing k removes the queue
+overflow (503s) but the queue itself is still long. Two effects to understand:
+
+```
+Below saturation threshold        Above saturation threshold
+──────────────────────────        ──────────────────────────
+k reduction → lower latency       k reduction → fewer 503s
+k reduction → fewer 503s          latency stays flat (queue-dominated)
+→ Fix k, replicas optional        → Fix k first, then right-size replicas
+```
+
+For a customer reporting 503s at **10 concurrent**: they are near (not far above)
+their saturation threshold. At that load, k reduction produces both improvements —
+fewer 503s **and** lower latency. The extreme-concurrency case above shows the
+floor: once queueing dominates, replicas are needed alongside k reduction.
+
+### Recommended LangChain configuration
+
+```python
+# Before (common — causes 503s on large indexes)
+retriever = vector_store.as_retriever(search_kwargs={"k": 50})
+
+# After (recommended starting point)
+retriever = vector_store.as_retriever(search_kwargs={"k": 10})
+```
+
+`k=10` retrieves 10 HNSW candidates; the RAG chain almost always uses only the
+top 3–5 anyway. Going from k=50 to k=10 cuts per-query CPU by ~80% with
+negligible recall impact at this index size.
+
+### When k reduction alone is not enough
+
+If 503s persist after reducing k, the index size itself is the bottleneck.
+Combine k reduction with one or more of these:
+
+| Technique | How | Impact |
+|-----------|-----|--------|
+| **Pre-filter** | Add `$filter` on a metadata field + `vectorFilterMode: preFilter` | Prunes HNSW search space before traversal |
+| **Index routing** | Route queries to the department-specific index (20K–50K docs) instead of the full index (400K docs) | 8–20× cheaper per query |
+| **Field projection** | `$select` only the fields the app uses | Reduces serialisation overhead |
+| **Replica scaling** | Add replicas after query cost is optimised | Each replica handles its share of the reduced-cost queries |
+
+**Index routing example** — if the customer has 15 department indexes:
+
+```python
+# Instead of always querying the 446K-doc master index:
+index_map = {
+    "HR": "search-index-hr",          # 20K docs
+    "Legal": "search-index-legal",    # 45K docs
+    "Engineering": "search-index-eng",# 446K docs
+}
+index_name = index_map.get(user_department, "search-index-master")
+```
+
+Routing HR queries to the 20K-doc index is ~22× cheaper than the 446K index.
 
 ---
 
@@ -577,13 +777,20 @@ Log Analytics queries: kql/README.md
 
 ## Advisor — Threshold Rules
 
-| Condition                              | Recommendation                          |
-|----------------------------------------|-----------------------------------------|
-| 429 rate > 5%                          | Add replicas; calculate N from QPS ratio |
-| 429 rate 1–5%                          | Early warning; add 1–2 replicas         |
-| p95 > 800ms, 429 rate = 0%            | Query complexity; check semantic use    |
-| p95 > 1000ms, profile = semantic      | Reduce semantic result window           |
-| p95 < 300ms, 429 rate = 0%            | Healthy at current concurrency          |
+| Condition                              | Signal type    | Recommendation                          |
+|----------------------------------------|----------------|-----------------------------------------|
+| 503 rate > 0%, low concurrency (< 20)  | Compute sat.   | Reduce k; check index size              |
+| 503 rate > 5%, high concurrency        | Compute sat.   | Add replicas; reduce k first            |
+| 503 rate 1–5%                          | Compute sat.   | Early warning; k reduction + 1 replica  |
+| p95 > 800ms, 503 rate = 0%            | Queuing        | Query complexity; check k and semantic  |
+| p95 > 1000ms, profile = semantic      | Ranker cost    | Reduce semantic result window           |
+| p95 < 300ms, 503 rate = 0%            | Healthy        | Healthy at current concurrency          |
+| 429 rate > 0%                          | Rate limit     | Rare for vector search; check service QPS cap |
+
+**429 vs 503:** HTTP 503 = replica compute-saturated (CPU threads full, queue overflows).
+HTTP 429 = service-level rate limit hit (administrative cap). For large vector indexes,
+the compute wall (503) is always reached before the rate limit (429). In practice,
+vector search load tests on S1 produce 503s, not 429s.
 
 **Replica estimate formula:**
 
@@ -595,11 +802,19 @@ This is a lower bound — network jitter and query variance add ~20% buffer.
 
 ---
 
-## Why Replicas Matter Even Without Search 429s
+## Why 503s, Not 429s — and Why Replicas Still Matter
 
-Azure AI Search S1 degrades under load via **latency**, not HTTP 429s. The service
-queues excess requests and processes them in turn — customers see slow responses,
-not errors. This makes the root cause easy to misdiagnose.
+Azure AI Search S1 saturates under load via **HTTP 503**, not 429s. When a replica's
+worker threads are all busy processing expensive vector queries, new requests are
+rejected outright — the queue is full. Customers see request failures or very high
+latency, not a polite "slow down" throttle. This makes the root cause easy to misdiagnose.
+
+**The 429 misconception:** many teams expect 429 (Too Many Requests) as the overload
+signal because that is what AOAI and other Azure services emit. Azure AI Search emits
+429 only when hitting the service-level QPS rate cap — an administrative limit that
+is rarely reached in practice for vector search workloads because the compute wall
+(503) is hit first. If you are tuning replicas based on 429 rate and see zero 429s,
+you are looking at the wrong metric. Watch 503 rate and p95 latency instead.
 
 ### The misdiagnosis pattern
 
@@ -626,19 +841,38 @@ Search was the root cause.
 
 ### What the data shows
 
-In load tests with 50,000 synthetic chunks and 300 concurrent workers:
+**Lever 1 — reduce k (query cost):** 100K doc index, S1, 1 replica, 100 concurrent
+
+```
+k = 50  (LangChain common override)    k = 10  (recommended)
+────────────────────────────────────   ────────────────────────────
+503  rate:    17.31%                   503  rate:     3.03%   (−83%)
+p50  latency:  6,796 ms               p50  latency:  6,775 ms  (~flat)
+p95  latency: 11,684 ms               p95  latency: 10,654 ms  (−9%)
+achieved QPS:    14.35                achieved QPS:    14.28   (~flat)
+```
+
+At extreme concurrency (100 workers) latency is queue-dominated — reducing k
+removes 503s but does not reduce latency. Both levers are needed.
+
+**Lever 2 — add replicas:** 50K doc index, 300 concurrent
 
 ```
 Replicas = 1                    Replicas = 3
 ────────────────────────────    ────────────────────────────
 p50  latency:  19,007 ms        p50  latency:   7,401 ms
-p95  latency:  24,232 ms        p95  latency:  10,995 ms   (-55%)
-429  rate:         0.0%         429  rate:         0.0%
+p95  latency:  24,232 ms        p95  latency:  10,995 ms   (−55%)
+503  rate:         0.0%         503  rate:         0.0%
 achieved QPS:      19.4         achieved QPS:      41.5    (+114%)
 ```
 
-No 429s from Search in either run. But the latency improvement is real and
-directly reduces downstream AOAI quota pressure.
+No 503s in either run at this concurrency level — the replica is queuing rather
+than rejecting. The latency improvement is real and directly reduces downstream
+AOAI quota pressure.
+
+**Right sequence:** reduce k first → measure the new saturation threshold →
+then right-size replicas. Skipping k reduction means over-provisioning replicas
+to compensate for expensive queries.
 
 ### How to use this in a customer conversation
 
@@ -647,6 +881,8 @@ directly reduces downstream AOAI quota pressure.
 | "Agent throws 429s under load" | AOAI TPM exhausted downstream of slow Search | Run `saturation.kql` — look for QPS plateau + latency climb |
 | "Search feels slow at peak hours" | Replica saturation (queuing) | Before/after replica comparison with this tool |
 | "Adding AOAI capacity didn't fix the 429s" | Search latency holding connections open | Scale Search replicas, re-test |
+| "503 errors even with 10 concurrent users" | Query cost too high (large index + high k) | Confirm 2 replicas minimum; ask for LangChain k; run `--k 50` vs `--k 10` |
+| "Adding replicas only helped a little" | Query cost is the bottleneck, not replica count | Reduce k first; partition the largest indexes; then reassess replicas |
 
 ---
 
@@ -655,13 +891,13 @@ directly reduces downstream AOAI quota pressure.
 See `kql/README.md` for queries to run in a customer's Log Analytics workspace.
 
 Covers:
-- 429 throttle rate by 5-minute window
+- 503 rate by 5-minute window (compute saturation — primary signal for vector search)
 - p50/p95/p99 latency trend
 - Query volume and QPS
 
 **Honest caveat:** Azure Search diagnostics do not expose replica-level
 saturation as a direct metric. The signal is inferred from the pattern:
-latency climbing + 429s appearing + QPS plateau. The KQL queries surface
+latency climbing + 503s appearing + QPS plateau. The KQL queries surface
 this pattern — they do not report a single "replica full" number.
 
 ---
