@@ -550,10 +550,55 @@ def _retrieve(query: str, k: int = 8, only_figures: bool = False) -> list[dict]:
     return r.json().get("value", [])
 
 
+def _vector_scores(query: str, k: int = 5, only_figures: bool = True) -> list[dict]:
+    """Pure vector search — the score is cosine similarity, so it is comparable
+    across queries. Hybrid/RRF scores are not, which makes them useless for
+    deciding whether anything actually matched."""
+    body = {
+        "top": k,
+        "select": "id,type,page,source_file,image_blob,text_for_embedding,document_id",
+        "vectorQueries": [
+            {"kind": "vector", "vector": _embed(query), "fields": "embedding", "k": k}
+        ],
+    }
+    if only_figures:
+        body["filter"] = "type eq 'figure'"
+    r = requests.post(
+        f"{SEARCH}/indexes/{INDEX}/docs/search?api-version=2024-07-01",
+        headers=_search_headers(), json=body, timeout=60,
+    )
+    r.raise_for_status()
+    return r.json().get("value", [])
+
+
+# Measured on this corpus: unrelated queries ("Boeing 747 tire pressure") top out
+# around 0.78, genuine matches land at 0.87+. Between the two is "the nearest
+# thing we have, but nothing depicts this".
+STRONG_MATCH = 0.86
+WEAK_MATCH = 0.82
+
+
 def cmd_figures(query: str) -> None:
     print(f"\n{BOLD}Visual retrieval:{RESET} {CYAN}{query}{RESET}\n")
-    for d in _retrieve(query, k=5, only_figures=True):
-        print(f"  {GREEN}p{d['page']:<4}{RESET} {d.get('image_blob','')}")
+    hits = _vector_scores(query, k=5, only_figures=True)
+    if not hits:
+        print(f"{YELLOW}No figures indexed.{RESET}")
+        return
+
+    best = hits[0].get("@search.score", 0)
+    if best < WEAK_MATCH:
+        print(f"{YELLOW}No figure in the corpus depicts this.{RESET} "
+              f"{DIM}(best similarity {best:.3f}; unrelated queries score ~0.78){RESET}")
+        print(f"{DIM}Showing nearest neighbours anyway — they are not answers.{RESET}\n")
+    elif best < STRONG_MATCH:
+        print(f"{YELLOW}Weak match.{RESET} {DIM}(best similarity {best:.3f}) "
+              f"Nothing clearly depicts this; treat the results as approximate.{RESET}\n")
+
+    for d in hits:
+        score = d.get("@search.score", 0)
+        mark = (f"{GREEN}●{RESET}" if score >= STRONG_MATCH
+                else f"{YELLOW}●{RESET}" if score >= WEAK_MATCH else f"{DIM}○{RESET}")
+        print(f"  {mark} {score:.3f}  {GREEN}p{d['page']:<4}{RESET} {d.get('image_blob','')}")
         print(f"        {DIM}{d['source_file'][:46]}{RESET}")
         print(f"        {(d.get('text_for_embedding') or '')[:220]}\n")
 
