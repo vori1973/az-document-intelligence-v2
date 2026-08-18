@@ -4,9 +4,9 @@ This capability enables clients to submit plain-text vector queries to the searc
 
 ## ADDED Requirements
 
-### Requirement: Search index SHALL expose a query-time vectorizer
+### Requirement: Query-time vectorization is available on the search index
 
-The search index MUST define a query-time vectorizer that references the existing Azure OpenAI embedding deployment and MUST associate that vectorizer with the vector search profile used by the searchable embedding field.
+The search index SHALL define a query-time vectorizer that references the existing Azure OpenAI embedding deployment, and SHALL associate that vectorizer with the vector search profile used by the searchable embedding field.
 
 #### Scenario: Plain-text vector query succeeds
 
@@ -18,9 +18,9 @@ The search index MUST define a query-time vectorizer that references the existin
 - **WHEN** the index configuration is deployed
 - **THEN** the vectorizer references the same embedding deployment and dimensionality used to generate indexed document embeddings
 
-### Requirement: Search service SHALL authenticate to the embedding deployment with managed identity
+### Requirement: Embedding deployment access uses managed identity
 
-The search service MUST have the required data-plane authorization to call the Azure OpenAI embedding deployment, and the configuration MUST NOT require an API key or stored secret.
+The search service SHALL hold the data-plane authorization required to call the Azure OpenAI embedding deployment, and the configuration SHALL NOT require an API key or stored secret.
 
 #### Scenario: Managed identity authorization is present
 
