@@ -495,30 +495,95 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
 
 
 def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
-    """Cover page so the colours explain themselves on screen."""
-    page = pdf.new_page(0, width=pdf[0].rect.width, height=pdf[0].rect.height)
-    y = 60
-    page.insert_text((50, y), "Figure qualification", fontsize=20, fontname="hebo")
-    page.insert_text((50, y + 22), name, fontsize=10, fontname="helv", color=(0.4, 0.4, 0.4))
+    """Append a legend page so the colours explain themselves on screen.
 
-    y += 60
+    Appended last, never inserted first: a cover page at index 0 shifts every
+    source page by one, so the annotated PDF stops agreeing with the page
+    numbers printed in the boxes and quoted in the citations.
+
+    The layout scales with page width. The corpus includes 4in-wide pages,
+    where the original fixed 50pt margins and 240pt count column ran off the
+    edge and the footer lines were clipped mid-sentence.
+    """
+    w, h = pdf[0].rect.width, pdf[0].rect.height
+    page = pdf.new_page(-1, width=w, height=h)
+
+    # Scale down on narrow pages, but never blow the layout up on wide ones.
+    scale = min(1.0, w / 612.0)
+    margin = max(18.0, 50.0 * scale)
+    avail = w - 2 * margin
+    bottom = h - margin
+
+    f_title = max(13.0, 20.0 * scale)
+    f_name = max(7.5, 10.0 * scale)
+    f_row = max(8.0, 11.0 * scale)
+    f_note = max(7.5, 10.0 * scale)
+
+    def _block(text, top, size, font, color=None, x0=None, x1=None, align=None) -> float:
+        """Draw wrapped text at `top`; return the height it actually used.
+
+        The box always runs to the bottom margin. insert_textbox silently
+        draws nothing when the box is too short for even one line, so sizing
+        it generously and reading back the unused space is the only reliable
+        way to both fit the text and know how far to advance.
+        """
+        box = fitz.Rect(x0 if x0 is not None else margin, top,
+                        x1 if x1 is not None else margin + avail, bottom)
+        if box.height <= 0 or box.width <= 0:
+            return 0.0
+        kwargs = {"fontsize": size, "fontname": font}
+        if color is not None:
+            kwargs["color"] = color
+        if align is not None:
+            kwargs["align"] = align
+        # The base-14 fonts are Latin-1 only; anything outside it renders as
+        # "?", and `name` is a filename we do not control.
+        safe = text.encode("latin-1", "replace").decode("latin-1")
+        unused = page.insert_textbox(box, safe, **kwargs)
+        return box.height - unused if unused >= 0 else box.height
+
+    y = max(30.0, 60.0 * scale)
+    y += _block("Figure qualification", y, f_title, "hebo") + f_title * 0.15
+    y += _block(name, y, f_name, "helv", color=(0.4, 0.4, 0.4))
+
+    y += max(16.0, 32.0 * scale)
     total = sum(counts.values())
+    swatch_w = max(14.0, 24.0 * scale)
+    gap = max(6.0, 10.0 * scale)
+
     for stage in ("retain", "retain_low_confidence", "rejected_geometry", "rejected_vision"):
         n = counts.get(stage, 0)
-        if not n:
+        if not n or y >= bottom:
             continue
         color = STAGE_COLORS[stage]
-        page.draw_rect(fitz.Rect(50, y - 9, 74, y + 3), color=color, fill=color)
-        page.insert_text((84, y), f"{STAGE_LABELS[stage]}", fontsize=11, fontname="hebo")
-        page.insert_text((240, y), f"{n} figures ({100*n/total:.0f}%)", fontsize=11, fontname="helv")
-        y += 24
 
-    y += 10
-    page.insert_text((50, y), f"{total} figures detected by Document Intelligence.",
-                     fontsize=10, fontname="helv", color=(0.3, 0.3, 0.3))
-    page.insert_text((50, y + 16),
-                     "Red boxes never reached the vision model — that is the cost control.",
-                     fontsize=10, fontname="helv", color=(0.3, 0.3, 0.3))
+        # Count is right-aligned to the margin rather than parked at a fixed
+        # x, so it cannot collide with the label on a narrow page.
+        count_text = f"{n} ({100 * n / total:.0f}%)"
+        count_w = fitz.get_text_length(count_text, fontname="helv", fontsize=f_row) + 4
+        label_x = margin + swatch_w + gap
+        label_w = max(0.0, avail - swatch_w - gap - count_w - 4)
+
+        page.draw_rect(
+            fitz.Rect(margin, y + f_row * 0.15, margin + swatch_w, y + f_row * 0.95),
+            color=color, fill=color,
+        )
+        used = _block(STAGE_LABELS[stage], y, f_row, "hebo",
+                      x0=label_x, x1=label_x + label_w)
+        _block(count_text, y, f_row, "helv",
+               x0=margin + avail - count_w, x1=margin + avail,
+               align=fitz.TEXT_ALIGN_RIGHT)
+        y += max(used, f_row) + max(4.0, 7.0 * scale)
+
+    y += max(6.0, 10.0 * scale)
+    for note in (
+        f"{total} figures detected by Document Intelligence.",
+        "Red boxes never reached the vision model - that is the cost control.",
+        "This legend is the last page, so page numbers still match the citations.",
+    ):
+        if y >= bottom:
+            break
+        y += _block(note, y, f_note, "helv", color=(0.3, 0.3, 0.3)) + f_note * 0.4
 
 
 def _is_wsl() -> bool:

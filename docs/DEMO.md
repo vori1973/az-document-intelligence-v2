@@ -191,7 +191,7 @@ Every figure Document Intelligence found gets a box:
 | 🟥 red | rejected by geometry — **never sent to the vision model** |
 | 🟪 purple | reached the vision model, which judged it not meaningful |
 
-A cover page is prepended with the legend and totals. Each box is also a real
+The legend and totals are **appended as the last page**. Each box is also a real
 PDF annotation — **hover it in any viewer to read the rejection reason** or the
 generated description.
 
@@ -201,8 +201,8 @@ on the Surface catalog the red box sits squarely on the Microsoft Surface logo
 in the page corner, and green wraps the actual product photography. The picture
 argues the cost model better than a slide does.
 
-Note the annotated PDF has the legend inserted as page 1, so page numbers shift
-by one versus citations.
+Page numbers in the annotated PDF match the citations exactly — the legend goes
+at the end, so it never shifts the source pages.
 
 ### Optional: pull everything local first
 
