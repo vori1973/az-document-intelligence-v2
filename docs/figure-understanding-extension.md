@@ -1362,11 +1362,70 @@ A preview feature can move into an earlier phase if it materially improves the a
 
 ## Known Gaps
 
-What was actually deployed (Phase 1: 4A/4B/4C + enriched chunks) has one
-measured accuracy gap, distinct from the deferred capabilities in
-[Delivery Phases](#delivery-phases) above.
+What was actually deployed (Phase 1: 4A/4B/4C + enriched chunks) has two
+known gaps, distinct from the deferred capabilities in
+[Delivery Phases](#delivery-phases) above: one about description quality,
+one about detection coverage.
 
-### Figures are described without page context ← highest impact
+### ADI can miss whole figures — a detection gap, not a reading gap
+
+Step 4A only ever sees what ADI's `figures[]` array reports. On
+`162000-159772.pdf` (16-page patient brochure, confirmed 2026-08-17), ADI
+detected 9 figures total — none on pages 6 or 8. Both pages contain real
+embedded photographs: opening the PDF directly with PyMuPDF shows page 6's
+image covers ~64% of the page, page 8's ~44%, both bleeding slightly past the
+page trim on an unusually narrow (4in × 9in) page format. Nothing was
+rejected by qualification (`step4a-result.json`: `rejected: 0`) — there was
+nothing *to* reject, because ADI never reported a candidate for either page.
+
+**OCR does not backstop this.** The second-pass reader (see
+[PIPELINE.md § data sources](PIPELINE.md#data-sources)) only activates on
+pages the confidence router flags, and routing keys entirely off *table*
+signals — cell confidence, rowSpan, orientation, figure-overlaps-table. A
+page with no ADI table and no ADI figure never reaches the router, so OCR
+would not fire here even if enabled. And even forced onto the page manually,
+OCR's extracted images are merged back by matching against ADI's `figures[]`
+index — with zero ADI figures on the page there is no index slot to attach
+OCR's output to, and no polygon to cite. OCR improves *reading* a region ADI
+already found; it cannot supply a region ADI never found.
+
+**A page-level VLM (`PAGE_UNDERSTANDING_MODEL`, reserved and unbuilt — see
+[Model and Feature Policy](#model-and-feature-policy)) is a partial fix at
+best.** It could describe the page and recover the content as a
+`page_visual_summary` chunk, but that chunk type cites the *page*, not a
+polygon — weaker than the exact-box citation every other figure gets.
+
+**PyMuPDF is the actual fix, and it's already designed, just not built:**
+the [Pre-Pass § embedded raster image signals](#embedded-raster-image-signals)
+enumerates the PDF's own image placements independently of ADI — the same
+`page.get_images(full=True)` / `get_image_rects()` calls used to confirm this
+case — and cross-checks them against ADI's `figures[]` polygons via the
+`possible_missed_visual_content` signal. Unlike OCR or a page-level VLM, this
+recovers a *real* bounding polygon straight from the PDF's own placement
+rectangle, so a rescued figure keeps full citation quality rather than
+degrading to a page number. It remains unimplemented.
+
+**Scanned pages need a different backstop — gated per page, not per
+document.** A scanned page is one full-page raster with no discrete
+sub-objects for PyMuPDF to enumerate — object-structure-wise it's
+indistinguishable from a deliberate full-bleed background photo, and
+`FIGURE_MAX_AREA_RATIO`-style filtering correctly treats both as noise
+rather than a candidate. ADI still handles scanned pages well (its layout
+model works on rendered pixels, not PDF object structure — that's why it
+doesn't need this fix), but there is currently no backstop if ADI's own
+detector misses a sub-figure baked into a scan, short of the reserved,
+unbuilt page-level VLM. Real-world documents are rarely genuinely mixed
+(scanned + digitally-born pages in one file), since both formats usually
+come from a single production pipeline — but the rare mixed case (e.g.
+scanned exhibits merged into a digital report) is a *per-page* property, so
+the pre-pass should gate per page rather than assume one classification for
+the whole document: skip the cross-check on pages whose images collectively
+cover ~100% of the page area, trust it where a partial-coverage image sits
+alongside live text. `step1-result.json` currently records `has_text` as one
+document-level boolean; extending it to page granularity is the actual
+prerequisite here, not a redesign.
+
+### Figures are described without page context
 
 Step 4C's vision call (see [Purpose](#purpose) and the schema above) receives
 the cropped image, page number, ADI caption, routing signals, and geometry —
