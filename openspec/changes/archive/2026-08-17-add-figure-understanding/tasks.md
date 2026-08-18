@@ -19,7 +19,7 @@
 - [x] 3.3 Implement the four hard rejection rules, each requiring a geometric trigger AND no textual reference
 - [x] 3.4 Persist all candidates — retained and rejected, with reasons — to `figures.json`
 - [x] 3.5 Write `step4a-result.json` per the existing step-result-files capability
-- [ ] 3.6 Unit-test the qualification rules, including the reference-overrides-geometry case
+- [x] 3.6 Unit-test the qualification rules, including the reference-overrides-geometry case
 
 ## 4. Step 4C — vision understanding
 
@@ -29,7 +29,7 @@
 - [x] 4.4 Bound concurrency and retry transient failures with backoff
 - [x] 4.5 Apply the routing outcome table — only a confident negative rejects
 - [x] 4.6 Persist `figure-understanding.json` and `step4c-result.json`
-- [ ] 4.7 Unit-test the routing outcome mapping across all verdict combinations
+- [x] 4.7 Unit-test the routing outcome mapping across all verdict combinations
 
 ## 5. Orchestration
 
@@ -45,7 +45,7 @@
 - [x] 6.3 Drop figure chunks whose routing outcome is a confident rejection
 - [x] 6.4 Carry the tight crop URI into `image_blob`
 - [x] 6.5 Preserve caption-only behavior when understanding is unavailable
-- [ ] 6.6 Unit-test the composed text for both the enriched and fallback paths
+- [x] 6.6 Unit-test the composed text for both the enriched and fallback paths
 
 ## 7. Deployment and validation
 
