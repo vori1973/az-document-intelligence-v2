@@ -164,6 +164,46 @@ While it runs, move to Act 2 in a second terminal.
 
 ## Act 2 — What the pipeline decided (~2 min)
 
+### Optional: annotate the PDF with the verdicts
+
+This is the strongest single visual in the deck — the qualification decision
+drawn straight onto the customer's own document:
+
+```bash
+.venv/bin/python scripts/demo.py annotate mydoc.pdf
+# → demo-assets/output/mydoc/mydoc-annotated.pdf
+```
+
+```
+  INDEXED               25  (43.9%)
+  INDEXED (low conf)    10  (17.5%)
+  REJECTED              21  (36.8%)
+  REJECTED (vision)      1  ( 1.8%)
+  total detected        57
+```
+
+Every figure Document Intelligence found gets a box:
+
+| Colour | Meaning |
+|---|---|
+| 🟩 green | qualified, described, indexed |
+| 🟧 amber | indexed, but the vision model flagged low confidence |
+| 🟥 red | rejected by geometry — **never sent to the vision model** |
+| 🟪 purple | reached the vision model, which judged it not meaningful |
+
+A cover page is prepended with the legend and totals. Each box is also a real
+PDF annotation — **hover it in any viewer to read the rejection reason** or the
+generated description.
+
+**Say:** *"Thirty-seven percent of what the layout model detected never cost us
+a vision call. Those red boxes are logos and banner rules."* Then point at one —
+on the Surface catalog the red box sits squarely on the Microsoft Surface logo
+in the page corner, and green wraps the actual product photography. The picture
+argues the cost model better than a slide does.
+
+Note the annotated PDF has the legend inserted as page 1, so page numbers shift
+by one versus citations.
+
 ### Optional: pull everything local first
 
 Clicking through blob storage in the portal is painful. Download the whole run
@@ -504,6 +544,7 @@ demo.py ask    "question"         # one-shot grounded Q&A with cited figure sour
 demo.py chat                      # interactive multi-turn chat; /figure N opens a crop
 demo.py figures "query"           # visual retrieval only
 demo.py pull   <pdf|blob-name>    # download all artifacts to demo-assets/output/
+demo.py annotate <pdf>            # draw kept/rejected boxes on the source PDF (needs pull first)
 ```
 
 PDFs go in `demo-assets/docs/` (tracked folder, git-ignored contents — see its

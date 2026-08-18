@@ -10,6 +10,7 @@ Usage:
   .venv/bin/python scripts/demo.py watch <file|blob>    # follow a run (waits for it to appear)
   .venv/bin/python scripts/demo.py show  <file|blob>    # figures.json / understanding / chunks
   .venv/bin/python scripts/demo.py crop  <file|blob> <page> <fig>
+  .venv/bin/python scripts/demo.py annotate doc.pdf     # draw kept/rejected boxes on the PDF
   .venv/bin/python scripts/demo.py chat                 # interactive chat with citations
   .venv/bin/python scripts/demo.py ask "question"       # one-shot grounded Q&A
   .venv/bin/python scripts/demo.py figures "query"      # visual retrieval only
@@ -353,6 +354,154 @@ ARTIFACT_NOTES = {
 }
 
 
+STAGE_COLORS = {
+    "retain": (0.05, 0.65, 0.15),
+    "retain_low_confidence": (0.90, 0.65, 0.05),
+    "rejected_geometry": (0.85, 0.10, 0.10),
+    "rejected_vision": (0.65, 0.10, 0.55),
+}
+STAGE_LABELS = {
+    "retain": "INDEXED",
+    "retain_low_confidence": "INDEXED (low conf)",
+    "rejected_geometry": "REJECTED",
+    "rejected_vision": "REJECTED (vision)",
+}
+
+
+def _load_local_json(path: str):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+
+
+def _verdicts(run_dir: str) -> list[dict]:
+    """Join qualification (figures.json) with vision routing (figure-understanding.json)."""
+    figures = _load_local_json(os.path.join(run_dir, "figures.json")) or []
+    understanding = _load_local_json(os.path.join(run_dir, "figure-understanding.json")) or []
+    by_key = {(u["page"], u["figure_index"]): u for u in understanding}
+
+    out = []
+    for f in figures:
+        u = by_key.get((f["page"], f["figure_index"]))
+        if f.get("status") == "rejected":
+            stage, why = "rejected_geometry", f.get("rejection_reason") or "rejected"
+        elif u is None:
+            stage, why = "rejected_geometry", "not analyzed (cap reached)"
+        else:
+            outcome = u.get("routing_outcome", "retain")
+            desc = (u.get("understanding") or {}).get("short_description") or ""
+            if outcome == "reject":
+                stage, why = "rejected_vision", "vision: not meaningful"
+            else:
+                stage, why = outcome, desc
+        out.append({**f, "stage": stage, "why": why})
+    return out
+
+
+def cmd_annotate(target: str, dest: str | None = None) -> None:
+    """Draw qualification verdicts onto the source PDF: green kept, red rejected."""
+    try:
+        import fitz
+    except ImportError:
+        raise SystemExit("PyMuPDF required:  .venv/bin/pip install --no-compile pymupdf")
+
+    label = os.path.splitext(os.path.basename(target))[0]
+    run_dir = dest or os.path.join(DEFAULT_OUTPUT, label)
+    if not os.path.isdir(run_dir):
+        raise SystemExit(
+            f"No pulled run at {run_dir}\n"
+            f"  Run:  .venv/bin/python scripts/demo.py pull {target}"
+        )
+
+    src = target if os.path.exists(target) else os.path.join(DEFAULT_CORPUS, os.path.basename(target))
+    if not os.path.exists(src):
+        raise SystemExit(f"Need the source PDF. Not found: {src}")
+
+    figs = _verdicts(run_dir)
+    if not figs:
+        raise SystemExit(f"No figures.json in {run_dir}")
+
+    pdf = fitz.open(src)
+    counts: dict[str, int] = {}
+
+    for f in figs:
+        stage = f["stage"]
+        counts[stage] = counts.get(stage, 0) + 1
+        page = pdf[f["page"] - 1]
+
+        # ADI polygons are in inches; PDF user space is points, origin top-left.
+        poly = f["bounding_polygon"]
+        xs, ys = poly[0::2], poly[1::2]
+        scale = page.rect.width / f["page_width"]
+        rect = fitz.Rect(
+            min(xs) * scale, min(ys) * scale, max(xs) * scale, max(ys) * scale
+        )
+
+        color = STAGE_COLORS[stage]
+        page.draw_rect(rect, color=color, width=1.6)
+
+        tag = f"{STAGE_LABELS[stage]} · {f['figure_id']}"
+        if stage.startswith("rejected"):
+            tag += f" · {f['why'][:38]}"
+        tw = fitz.get_text_length(tag, fontname="helv", fontsize=7) + 6
+        band = fitz.Rect(rect.x0, max(0, rect.y0 - 11), min(rect.x0 + tw, page.rect.width), rect.y0)
+        page.draw_rect(band, color=color, fill=color)
+        page.insert_textbox(band, tag, fontsize=7, fontname="helv",
+                            color=(1, 1, 1), align=fitz.TEXT_ALIGN_CENTER)
+
+        note = page.add_rect_annot(rect)
+        note.set_colors(stroke=color)
+        note.set_info(title=STAGE_LABELS[stage], content=f["why"])
+        note.set_opacity(0.85)
+        note.update()
+
+    _annotate_legend(pdf, fitz, counts, os.path.basename(src))
+
+    out = os.path.join(run_dir, f"{label}-annotated.pdf")
+    pdf.save(out, garbage=3, deflate=True)
+    pdf.close()
+
+    print(f"\n{BOLD}Annotated{RESET} {os.path.basename(src)} → {GREEN}{out}{RESET}\n")
+    total = sum(counts.values())
+    for stage in ("retain", "retain_low_confidence", "rejected_geometry", "rejected_vision"):
+        n = counts.get(stage, 0)
+        if n:
+            pct = 100 * n / total
+            print(f"  {STAGE_LABELS[stage]:<20} {n:>3}  ({pct:4.1f}%)")
+    print(f"  {'total detected':<20} {total:>3}")
+    print(f"\n{DIM}Hover any box in a PDF viewer to read the reason.{RESET}")
+    _try_open(out)
+
+
+def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
+    """Cover page so the colours explain themselves on screen."""
+    page = pdf.new_page(0, width=pdf[0].rect.width, height=pdf[0].rect.height)
+    y = 60
+    page.insert_text((50, y), "Figure qualification", fontsize=20, fontname="hebo")
+    page.insert_text((50, y + 22), name, fontsize=10, fontname="helv", color=(0.4, 0.4, 0.4))
+
+    y += 60
+    total = sum(counts.values())
+    for stage in ("retain", "retain_low_confidence", "rejected_geometry", "rejected_vision"):
+        n = counts.get(stage, 0)
+        if not n:
+            continue
+        color = STAGE_COLORS[stage]
+        page.draw_rect(fitz.Rect(50, y - 9, 74, y + 3), color=color, fill=color)
+        page.insert_text((84, y), f"{STAGE_LABELS[stage]}", fontsize=11, fontname="hebo")
+        page.insert_text((240, y), f"{n} figures ({100*n/total:.0f}%)", fontsize=11, fontname="helv")
+        y += 24
+
+    y += 10
+    page.insert_text((50, y), f"{total} figures detected by Document Intelligence.",
+                     fontsize=10, fontname="helv", color=(0.3, 0.3, 0.3))
+    page.insert_text((50, y + 16),
+                     "Red boxes never reached the vision model — that is the cost control.",
+                     fontsize=10, fontname="helv", color=(0.3, 0.3, 0.3))
+
+
 def _is_wsl() -> bool:
     return "microsoft" in os.uname().release.lower() if hasattr(os, "uname") else False
 
@@ -579,7 +728,7 @@ def main() -> None:
     {
         "upload": cmd_upload, "watch": cmd_watch, "show": cmd_show,
         "crop": cmd_crop, "ask": cmd_ask, "figures": cmd_figures,
-        "ls": cmd_ls, "pull": cmd_pull, "chat": cmd_chat,
+        "ls": cmd_ls, "pull": cmd_pull, "chat": cmd_chat, "annotate": cmd_annotate,
     }[cmd](*args)
 
 
