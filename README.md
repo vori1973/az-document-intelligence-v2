@@ -65,7 +65,8 @@ PDF uploaded to documents/
          +-- [fan-out] extract_page × N  → extract page PDFs → processing/
          +-- [fan-out] ocr_page × N      → Mistral OCR [disabled: ADI covers all pages]
          +-- step4a_figures     → crop figures, qualify (drop logos/rules/separators)
-         +-- step4c_understanding → gpt-4o-mini vision → description + search keywords
+         +-- step4c_understanding → 🔮 calls gpt-4o-mini vision (the ONLY AI call
+         |                          in the pipeline besides embeddings) → description
          +-- step5_chunks       → paragraph / table-row / figure chunks
          +-- step6_embed        → OpenAI text-embedding-ada-002 (1536-dim)
          +-- step7_search       → create/update index schema, upsert chunks
@@ -106,17 +107,36 @@ All service-to-service auth uses the Function App's **system-assigned Managed Id
 
 ## 📚 Documentation
 
+The architecture diagram above is the **what**. These docs are the **why**,
+split by concern rather than bundled into one file:
+
+```
+docs/PIPELINE.md ──────────────► the ingestion spine: data sources, the 7
+   │                              pipeline steps, confidence routing, citation
+   │                              authority, pipeline-level Phase 2 gaps
+   │
+   ├── links to ──► docs/CHUNKING.md ──► how step 5 builds table-row /
+   │                                     paragraph / figure chunks, and why
+   │                                     three types instead of one
+   │
+   └── links to ──► docs/figure-understanding-extension.md ──► the ONLY step
+                     that calls a vision model (4A crop → 4B qualify → 4C
+                     describe), its prompt/schema, and its own accuracy gap
+```
+
 | Doc | Read it for |
 |---|---|
-| **[docs/ALGORITHM.md](docs/ALGORITHM.md)** | **How the pipeline works and why** — data sources, routing, chunking rationale, citation authority, and the [Phase 2 gap list](docs/ALGORITHM.md#phase-2--known-gaps) |
+| **[docs/PIPELINE.md](docs/PIPELINE.md)** | **Start here.** Overview, data sources, the 7-step pipeline, confidence routing, citation authority |
+| [docs/CHUNKING.md](docs/CHUNKING.md) | why one chunk per table row (not per table, not inlined), paragraph filtering, figure chunk shape |
+| [docs/figure-understanding-extension.md](docs/figure-understanding-extension.md) | the vision-model call: crop → qualify → describe, cost controls, known accuracy gap |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | infrastructure, app settings, RBAC, operations |
 | [docs/DEMO.md](docs/DEMO.md) | presenting the pipeline end to end |
-| [docs/figure-understanding-extension.md](docs/figure-understanding-extension.md) | full figure-understanding design |
 | [TODO.md](TODO.md) | original design & implementation plan (historical) |
 | [AGENTS.md](AGENTS.md) | conventions for AI coding agents |
 
-New to the project? Start with **ALGORITHM.md** — it explains the design
-decisions the code assumes you already understand.
+New to the project? Start with **PIPELINE.md** — it explains the design
+decisions the code assumes you already understand, and links out to the other
+two only where those concerns actually begin.
 
 ---
 
@@ -151,9 +171,10 @@ az-document-intelligence-v2/
   📄 AGENTS.md              — conventions for AI coding agents
   |
   📁 docs/
-  |   📄 ALGORITHM.md       — how the pipeline works, why, and Phase 2 gaps
+  |   📄 PIPELINE.md        — ingestion overview: start here
+  |   📄 CHUNKING.md        — table-row / paragraph / figure chunk design
+  |   📄 figure-understanding-extension.md  — the vision-model step
   |   📄 DEMO.md            — demo runbook
-  |   📄 figure-understanding-extension.md
   |   📁 diagrams/          — chunking strategy SVG
   |
   📁 infra/                 — Bicep IaC
@@ -258,4 +279,4 @@ Currently `OCR_ENABLED=false` — ADI handles all pages. Mistral OCR activates w
 
 This project is v2 of an earlier local **TypeScript** pipeline. v2 ports the extraction and chunking logic to Python and lifts it fully into Azure: Event Grid replaces the CLI entrypoint, Durable Functions replace the sequential orchestrator, Blob Storage replaces the local `output/` directory, and Managed Identity replaces `.env` API keys.
 
-The routing rules, chunk schema, ADI normalization passes, and AI Search index structure are preserved from v1. **This repository is standalone** — the design rationale carried over from v1 is documented in [docs/ALGORITHM.md](docs/ALGORITHM.md), so no access to the original project is required.
+The routing rules, chunk schema, ADI normalization passes, and AI Search index structure are preserved from v1. **This repository is standalone** — the design rationale carried over from v1 is documented in [docs/PIPELINE.md](docs/PIPELINE.md), so no access to the original project is required.

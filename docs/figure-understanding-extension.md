@@ -8,7 +8,7 @@
 >
 > **Known gap:** figures are currently described **without surrounding page text
 > or document context**, which measurably weakens retrieval for uncaptioned
-> figures. See [ALGORITHM.md → Phase 2](ALGORITHM.md#1-figures-are-described-without-page-context--highest-impact).
+> figures. See [Known Gaps](#known-gaps) below.
 
 ## Purpose
 
@@ -1325,6 +1325,49 @@ A preview feature can move into an earlier phase if it materially improves the a
 | Multi-vector capability requires evaluation | Azure AI Search preview support does not automatically reproduce late-interaction MaxSim behavior. |
 | Selective versus full-page indexing is benchmark-driven | Slowly changing corpora can justify broader indexing when recall improves materially. |
 | Generated descriptions are metadata, not source text | The original image and ADI citation remain available for inspection. |
+
+---
+
+## Known Gaps
+
+What was actually deployed (Phase 1: 4A/4B/4C + enriched chunks) has one
+measured accuracy gap, distinct from the deferred capabilities in
+[Delivery Phases](#delivery-phases) above.
+
+### Figures are described without page context ← highest impact
+
+Step 4C's vision call (see [Purpose](#purpose) and the schema above) receives
+the cropped image, page number, ADI caption, routing signals, and geometry —
+but **no surrounding page text and no document-level context.**
+
+The ADI caption is usually absent: **only 8 of 57 figures** in a real 19-page
+catalog had one, so 28 of 36 descriptions were generated with effectively no
+text signal. The model describes a crop in isolation, unaware it is reading a
+Surface education catalog versus an orthopedic surgical technique guide.
+
+Measured effect (cosine similarity, same corpus, same embedding model):
+
+| Figure | Context available | Best query score |
+|---|---|---|
+| `Figure 3. Implant planning and balance graph…` | ADI caption present | **0.893** |
+| `A group of students sitting on the floor…` | no caption | 0.78–0.83 vs. domain queries |
+
+For reference, an unrelated control query ("Boeing 747 tire pressure") tops out
+around 0.78 on this corpus — the noise floor. Captioned figures inherit domain
+vocabulary and rank well clear of it; uncaptioned ones get generic descriptive
+prose that sits close to noise against clinical or technical queries.
+
+**Fix:** pass (a) document-level context — filename plus a page-1 summary — and
+(b) the paragraphs nearest the figure's bounding box, into the step 4C prompt.
+The proximity math already exists in `step4a_figures.py` for reference
+detection, and the paragraph text is already available in `adi.json` with
+coordinates — no extra API calls required, just a larger prompt.
+
+**Cost:** requires a redeploy and re-ingesting existing documents, since it
+changes every subsequently generated description.
+
+This is the single highest-leverage improvement identified for this extension
+and is not yet implemented.
 
 ---
 

@@ -272,7 +272,7 @@ az monitor app-insights query \
 
 ## Enabling Mistral OCR later
 
-> This is [Phase 2 gap #3](docs/ALGORITHM.md#3-ocr-path-disabled). The router,
+> This is [Phase 2 gap #3](docs/PIPELINE.md#3-ocr-path-disabled). The router,
 > merge logic, and normalization are implemented and tested — only the model
 > deployment is missing.
 
