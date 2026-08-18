@@ -73,23 +73,20 @@ Vision-generated descriptions improve retrieval and understanding, but they do n
 
 The pipeline does not hard-code a specific model version. Model names change with each release cycle — what matters is the capability class, not the exact version string.
 
+**Deployed today** — configures the Step 4C call this document describes, one call per qualified **figure crop**:
+
 ```ini
-FIGURE_UNDERSTANDING_PROVIDER=<approved-provider>
-FIGURE_UNDERSTANDING_MODEL=<approved-multimodal-gpt-model>
-PAGE_UNDERSTANDING_MODEL=<approved-multimodal-gpt-model>
-VISUAL_EMBEDDING_MODEL=<approved-visual-embedding-model>
+FIGURE_UNDERSTANDING_MODEL=<approved-multimodal-gpt-model>   # e.g. gpt-4o-mini, see DEPLOYMENT.md
 ```
 
-> **Deployment status:** only `FIGURE_UNDERSTANDING_PROVIDER` /
-> `FIGURE_UNDERSTANDING_MODEL` are live — they configure the Step 4C call this
-> document describes, one call per qualified **figure crop**. `PAGE_UNDERSTANDING_MODEL`
-> and `VISUAL_EMBEDDING_MODEL` are config slots reserved for capabilities in
-> [Phase 2/3](#delivery-phases) that were never built: sending the model a
-> **full-page render** (not a crop) when ADI's figure detection may have missed
-> vector content, and embedding the image itself rather than its text
-> description. Neither replaces ADI or OCR — see
-> [PIPELINE.md](PIPELINE.md#data-sources) for what actually reads the document
-> text.
+**Reserved for future phases** — these are config-slot *names*, not settings you can set today. Nothing reads them; they don't appear in Bicep or `src/`. They stand in for capabilities that were designed but never built — see [Known Gaps](#known-gaps) and [Delivery Phases](#delivery-phases):
+
+```ini
+PAGE_UNDERSTANDING_MODEL=<approved-multimodal-gpt-model>      # Phase 2: full-page render fallback
+VISUAL_EMBEDDING_MODEL=<approved-visual-embedding-model>      # Phase 3: embed the image itself
+```
+
+Neither replaces ADI or OCR — see [PIPELINE.md](PIPELINE.md#data-sources) for what actually reads the document text.
 
 **Practical guidance on model size:**
 
@@ -108,7 +105,7 @@ Page-level understanding (page_visual_summary chunk, optional)
     -> prefer mini — task is descriptive, not analytical
 ```
 
-Model size is a configuration choice, not an architectural one. The model slots are independent — the figure-understanding model and the page-understanding model can point to different approved versions.
+Model size is a configuration choice, not an architectural one. If page-level understanding is ever built (Phase 2), its model slot is independent — it and the figure-understanding model would not need to point to the same approved version.
 
 A candidate model must be validated for:
 
@@ -1214,43 +1211,67 @@ This keeps an accuracy-first design economically manageable.
 
 ## Configuration
 
-```ini
-FIGURE_PROCESSING_ENABLED=true
+### Deployed today
 
-# Hard-filter thresholds
+These are read by `src/activities/step4a_figures.py`, `step4c_understanding.py`,
+and `pipeline_orchestrator.py` right now. Full defaults and operational notes
+(cost, rollback) live in [DEPLOYMENT.md &sect; Figure understanding
+settings](../DEPLOYMENT.md#figure-understanding-settings) — this list is for
+orientation only, don't treat it as the source of truth for values.
+
+```ini
+FIGURE_UNDERSTANDING_ENABLED=true          # rollback switch — false skips vision entirely
+FIGURE_UNDERSTANDING_MODEL=gpt-4o-mini
+
+# Hard-filter thresholds (step4a qualification)
 FIGURE_MIN_AREA_RATIO=0.01
 FIGURE_MAX_AREA_RATIO=0.90
 FIGURE_MAX_ASPECT_RATIO=8.0
 FIGURE_HEADER_FOOTER_OVERLAP_THRESHOLD=0.30
+FIGURE_REFERENCE_PROXIMITY_IN=1.0
+
+# Crop rendering
+FIGURE_CROP_DPI=200
+FIGURE_CROP_PADDING_IN=0.06
+
+# Cost control
+FIGURE_MAX_CONCURRENT=4
+FIGURE_MAX_PER_DOC=60
+```
+
+### Reserved for future phases
+
+None of these are read anywhere in `src/` or set in Bicep — they are
+placeholder names from the original design, sketching what config *would*
+look like if the [Known Gaps](#known-gaps) below were built. Do not set these
+expecting an effect.
+
+```ini
+# Repeat-figure (e.g. running logo) detection — never implemented,
+# repeat filtering today is a fixed heuristic, not configurable
 FIGURE_REPEAT_POSITION_TOLERANCE=0.02
 FIGURE_REPEAT_MIN_PAGES=3
 
-# Customer-approved figure-understanding model
-FIGURE_UNDERSTANDING_PROVIDER=<approved-provider>
-FIGURE_UNDERSTANDING_MODEL=<approved-vision-model>
-FIGURE_UNDERSTANDING_PROMPT_VERSION=v1
-FIGURE_UNDERSTANDING_SCHEMA_VERSION=v1
-
-# Context handling
+# Passing page/document context into the Step 4C prompt (Known Gaps #1)
 FIGURE_CONTEXT_CROP_ENABLED=true
 FIGURE_CONTEXT_PADDING=0.05
 
-# Relationships
+# Figure-to-figure relationship inference — not built
 FIGURE_RELATIONSHIP_EXPANSION_ENABLED=true
 FIGURE_INFERRED_ASSOCIATION_MIN_SCORE=0.50
 
-# Multimodal retrieval
+# Phase 3: embedding the image itself instead of its text description
 IMAGE_EMBEDDINGS_ENABLED=false
 IMAGE_EMBEDDING_PROVIDER=<approved-provider>
 IMAGE_EMBEDDING_MODEL=<approved-model>
 
-# Multi-vector or late-interaction retrieval
+# Phase 3: multi-vector / late-interaction full-page visual retrieval
 VISUAL_PAGE_RETRIEVAL_ENABLED=false
 VISUAL_PAGE_ROUTING_MODE=selective
 VISUAL_RETRIEVAL_PROVIDER=<approved-provider>
 VISUAL_RETRIEVAL_MODEL=<approved-model>
 
-# Preview capabilities
+# Governance for adopting any of the above under preview terms
 PREVIEW_FEATURES_ALLOWED=true
 PREVIEW_FEATURE_DECISION_RECORD_REQUIRED=true
 ```
