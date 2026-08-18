@@ -693,12 +693,33 @@ def _answer(question: str, hits: list[dict], history: list[dict] | None = None) 
     return resp.choices[0].message.content
 
 
+TYPE_TAGS = {
+    "figure": (CYAN, "Figure"),
+    "table_row": (YELLOW, "Table"),
+    "paragraph": (DIM, "Text"),
+}
+_TAG_WIDTH = max(len(label) for _, label in TYPE_TAGS.values())
+
+
 def _print_sources(hits: list[dict]) -> None:
+    """Label every source, not just figures.
+
+    A bare gap next to a text hit reads as "the tool found nothing there",
+    which is the opposite of the point: the answer is grounded in a mix of
+    prose, table rows, and figures, and the mix is what is worth seeing.
+    """
     print(f"{DIM}── sources ──{RESET}")
     for i, d in enumerate(hits):
-        tag = f"{CYAN}[Figure]{RESET} " if d["type"] == "figure" else "         "
-        img = f"  {DIM}{d.get('image_blob')}{RESET}" if d.get("image_blob") else ""
-        print(f"  [{i+1}] {tag}p{d['page']:<4} {os.path.basename(d['source_file'])[:38]}{img}")
+        color, label = TYPE_TAGS.get(d["type"], (DIM, d["type"]))
+        tag = f"{color}[{label:^{_TAG_WIDTH}}]{RESET}"
+        # Truncate the middle, not the tail: these filenames differ at the end,
+        # so cutting the tail makes distinct documents look identical.
+        name = os.path.basename(d["source_file"])
+        if len(name) > 40:
+            name = f"{name[:22]}…{name[-17:]}"
+        row = f"  [{i+1}] {tag} p{d['page']:<3} "
+        row += f"{name:<40}  {DIM}{d['image_blob']}{RESET}" if d.get("image_blob") else name
+        print(row)
 
 
 def cmd_ask(question: str) -> None:
@@ -780,16 +801,25 @@ def cmd_chat(*_: str) -> None:
                 print(f"{YELLOW}unknown command{RESET} — /help\n")
             continue
 
-        search_q = _standalone(q, history)
-        if search_q.lower() != q.lower():
-            print(f"{DIM}   ↳ searching: {search_q}{RESET}")
+        try:
+            search_q = _standalone(q, history)
+            if search_q.lower() != q.lower():
+                print(f"{DIM}   ↳ searching: {search_q}{RESET}")
 
-        hits = _retrieve(search_q, k=8)
-        if not hits:
-            print(f"{YELLOW}No matching chunks — is anything indexed?{RESET}\n")
+            hits = _retrieve(search_q, k=8)
+            if not hits:
+                print(f"{YELLOW}No matching chunks — is anything indexed?{RESET}\n")
+                continue
+
+            answer = _answer(q, hits, history)
+        except KeyboardInterrupt:
+            print(f"\n{DIM}cancelled{RESET}\n")
+            continue
+        except Exception as exc:
+            # A transient search or model failure must not end the session.
+            print(f"\n{YELLOW}Request failed:{RESET} {type(exc).__name__}: {exc}\n")
             continue
 
-        answer = _answer(q, hits, history)
         last_hits = hits
 
         print(f"\n{BOLD}{CYAN}bot ▸{RESET} {answer}\n")
@@ -812,6 +842,8 @@ def _open_source_figure(hits: list[dict], arg: str) -> None:
         return
     try:
         idx = int(arg.strip()) - 1
+        if idx < 0:
+            raise IndexError
         hit = hits[idx]
     except (ValueError, IndexError):
         print(f"{YELLOW}Usage: /figure N  (1–{len(hits)}){RESET}\n")
@@ -820,14 +852,34 @@ def _open_source_figure(hits: list[dict], arg: str) -> None:
         print(f"{YELLOW}Source [{idx+1}] is text, not a figure.{RESET}\n")
         return
 
-    doc_id = hit["document_id"]
-    prefix = _run_prefix(doc_id)
-    blob = f"{prefix}/{hit['image_blob']}"
+    # Prefer a pulled copy. It is faster, and it keeps the demo alive when the
+    # storage account is unreachable from here — the crops are already on disk
+    # for any document that has been through `demo.py pull`.
+    local = os.path.join(
+        "demo-assets", "output",
+        os.path.splitext(hit.get("source_file", ""))[0], hit["image_blob"],
+    )
+    if os.path.exists(local):
+        print(f"{GREEN}Opening{RESET} {local}  {DIM}(page {hit['page']}, local){RESET}")
+        _try_open(local)
+        print()
+        return
+
     out = os.path.join("/tmp", os.path.basename(hit["image_blob"]))
     try:
+        prefix = _run_prefix(hit["document_id"])
+        if not prefix:
+            raise RuntimeError(f"no run folder for {hit['document_id']}")
+        blob = f"{prefix}/{hit['image_blob']}"
         data = _blobs().get_container_client("processing").get_blob_client(blob).download_blob().readall()
     except Exception as exc:
-        print(f"{YELLOW}Could not fetch {blob}: {exc}{RESET}\n")
+        # Never let a storage problem end the session mid-demo.
+        print(f"{YELLOW}Could not fetch the crop from storage:{RESET} {type(exc).__name__}: {exc}")
+        if "AuthorizationFailure" in str(exc) or "not authorized" in str(exc):
+            print(f"{DIM}  The storage account may have public network access disabled,{RESET}")
+            print(f"{DIM}  or your sign-in lacks a data-plane role.{RESET}")
+        print(f"{DIM}  Local fallback would be: {local}{RESET}")
+        print(f"{DIM}  Populate it with: demo.py pull {hit.get('source_file','<doc>')}{RESET}\n")
         return
     with open(out, "wb") as fh:
         fh.write(data)
