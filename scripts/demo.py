@@ -400,6 +400,26 @@ def _verdicts(run_dir: str) -> list[dict]:
     return out
 
 
+def _save_pdf(pdf, out: str) -> str:
+    """Save, falling back to a timestamped name if the target is locked.
+
+    On Windows/WSL an open PDF viewer holds a lock on the file, so overwriting
+    raises PermissionError. Failing mid-demo is not acceptable — write a new
+    file and say so instead.
+    """
+    try:
+        pdf.save(out, garbage=3, deflate=True)
+        return out
+    except Exception as exc:
+        if "Permission denied" not in str(exc) and not isinstance(exc, PermissionError):
+            raise
+        stamped = f"{os.path.splitext(out)[0]}-{time.strftime('%H%M%S')}.pdf"
+        pdf.save(stamped, garbage=3, deflate=True)
+        print(f"{YELLOW}{os.path.basename(out)} is open in another program "
+              f"(close it to reuse the name).{RESET}")
+        return stamped
+
+
 def cmd_annotate(target: str, dest: str | None = None) -> None:
     """Draw qualification verdicts onto the source PDF: green kept, red rejected."""
     try:
@@ -459,8 +479,7 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
 
     _annotate_legend(pdf, fitz, counts, os.path.basename(src))
 
-    out = os.path.join(run_dir, f"{label}-annotated.pdf")
-    pdf.save(out, garbage=3, deflate=True)
+    out = _save_pdf(pdf, os.path.join(run_dir, f"{label}-annotated.pdf"))
     pdf.close()
 
     print(f"\n{BOLD}Annotated{RESET} {os.path.basename(src)} → {GREEN}{out}{RESET}\n")
