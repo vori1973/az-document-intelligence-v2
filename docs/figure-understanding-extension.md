@@ -1364,8 +1364,9 @@ A preview feature can move into an earlier phase if it materially improves the a
 
 What was actually deployed (Phase 1: 4A/4B/4C + enriched chunks) has two
 known gaps, distinct from the deferred capabilities in
-[Delivery Phases](#delivery-phases) above: one about description quality,
-one about detection coverage.
+[Delivery Phases](#delivery-phases) above: one about description quality
+(which degrades both retrieval *and* classification), one about detection
+coverage.
 
 ### ADI can miss whole figures — a detection gap, not a reading gap
 
@@ -1459,6 +1460,73 @@ changes every subsequently generated description.
 
 This is the single highest-leverage improvement identified for this extension
 and is not yet implemented.
+
+#### It also corrupts classification, not just retrieval (confirmed 2026-08-18)
+
+The retrieval effect above is the *measured* symptom, but the same missing
+context degrades the `category` field, and the system prompt is part of the
+cause. `SYSTEM_PROMPT` in `step4c_understanding.py` opens with:
+
+> You classify and describe figures extracted from **technical and medical
+> documents** so they can be retrieved by search.
+
+That domain assertion is fixed for every document, and `CATEGORIES` carries
+clinical values (`anatomical_illustration`, `procedure_illustration`)
+regardless of what the file actually is. On a consumer retail catalog the
+model reaches for them:
+
+| Document | Page | Assigned category | Actual content |
+|---|---|---|---|
+| `MicrosoftSurfaceCatalog.pdf` | 13 | `anatomical_illustration`, confidence **high** | "An illustration of a plant cell structure with labeled organelles" |
+| `MicrosoftSurfaceCatalog.pdf` | 2, 9 | `procedure_illustration` | "A classroom scene showing a teacher presenting a lesson on the solar system" |
+
+A plant-cell diagram is not anatomy and a classroom photo is not a procedure.
+The high-confidence label on the first is the concerning part: the model is
+not hedging, it is confidently applying the domain it was told to assume.
+
+The corpus splits cleanly along domain lines, which is what makes this a
+prompt problem rather than a model-quality one:
+
+| Document | Figures | `unknown` | low/medium confidence |
+|---|---|---|---|
+| `1561-Clatworthy-OS-FINAL-cr` (surgical technique) | 11 | 0 | 0 |
+| `117713-222783` (medical) | 2 | 0 | 0 |
+| `velys-hip-…-brochure` (patient-facing medical) | 4 | 1 | 1 |
+| `162000-159772` (patient brochure, photo-heavy) | 9 | 3 | 4 |
+| `MSFT-echo-SurfaceProIntel-Fact-Sheet` (consumer) | 4 | 1 | 2 |
+| `MicrosoftSurfaceCatalog` (consumer retail) | 36 | 6 | 16 |
+
+The document whose domain the prompt names scores 0 `unknown` and 0
+low-confidence, while the consumer retail catalog puts 44% of its figures at
+low or medium confidence. Corpus-wide, `unknown` is the *second most common*
+category (11 of 66, behind only `device_photo`).
+
+The split is not purely medical-vs-consumer: `162000-159772` is a medical
+patient brochure and still scores 3 `unknown` / 44% low-confidence, because it
+is photo-heavy marketing material with no captions — lifestyle photography is
+as far from the prompt's assumed domain as a retail catalog is. The common
+factor is *distance from the asserted domain*, not the industry.
+
+**This widens the fix rather than changing it.** Document-level context should
+condition the *prompt and taxonomy*, not only enrich the description text:
+
+- derive a one-line document descriptor (ADI already extracts the title and
+  page-1 prose; `step1-result.json` already carries `page_count`/`has_text`) —
+  a per-document summarization call amortizes over every figure in the file,
+  57 figures for 1 call on the catalog
+- inject it in place of the hardcoded "technical and medical documents"
+- consider gating domain-specific enum values, so clinical categories are not
+  offered for a document that is not clinical
+
+**Measuring it needs no new tooling.** `unknown` count and the
+`model_confidence_label` distribution are computable from existing
+`figure-understanding.json` artifacts, so the table above is a reusable
+before/after baseline. Keep the Microsoft documents in the corpus for exactly
+this reason — they are the regression test for the fix.
+
+**Caveat when reprocessing:** document identity is content-derived, so
+re-uploading unchanged bytes is silently skipped. Clear the document's
+`processing/_name-index/` entry to force a re-run.
 
 ---
 
