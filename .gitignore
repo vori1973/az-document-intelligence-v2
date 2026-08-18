@@ -48,4 +48,6 @@ scripts/load-test/query_bank.json
 demo-assets/docs/*
 !demo-assets/docs/.gitkeep
 !demo-assets/docs/README.md
-demo-assets/output/
+demo-assets/output/*
+!demo-assets/output/.gitkeep
+!demo-assets/output/README.md
