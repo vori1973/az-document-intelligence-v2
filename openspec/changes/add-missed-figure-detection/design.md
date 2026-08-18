@@ -1,6 +1,6 @@
 ## Context
 
-Step 4A builds its candidate set solely from `adi-results.json`, so ADI's `figures[]` array is the pipeline's only source of figure existence. The confirmed failure on `162000-159772.pdf` is a detection gap, not a reading gap: ADI reported 9 figures and none on pages 6 or 8, while both pages carry embedded photographs (~64% and ~44% page coverage) on an unusually narrow 4in × 9in trim, bleeding slightly past the page edge.
+Step 4A builds its candidate set solely from `adi-results.json`, so ADI's `figures[]` array is the pipeline's only source of figure existence. The confirmed failure on a 16-page clinical reference is a detection gap, not a reading gap: ADI reported 9 figures and none on pages 6 or 8, while both pages carry embedded photographs (~64% and ~44% page coverage) on an unusually narrow 4in × 9in trim, bleeding slightly past the page edge.
 
 PyMuPDF is already a dependency and is already opened twice in the pipeline — step 1 for the text heuristic and step 4A for cropping — so the enumeration itself costs no new dependency and no new document download. `step1-result.json` currently records `has_text` as a single document-level boolean.
 
@@ -53,7 +53,7 @@ See `proposal.md` for motivation, `specs/figure-detection-recovery/spec.md` for 
 
 1. Land the per-page classification in step 1 first; it is additive and safe to deploy alone.
 2. Land the cross-check and provenance in step 4A behind a configuration flag, defaulted off.
-3. Enable on the known corpus, confirm pages 6 and 8 of `162000-159772.pdf` are recovered and that previously detected figures are unchanged and not duplicated.
+3. Enable on the known corpus, confirm pages 6 and 8 of a 16-page clinical reference are recovered and that previously detected figures are unchanged and not duplicated.
 4. Reprocess the existing test documents, clearing their name-index entries so identical bytes are not skipped.
 5. Update the `figure-understanding` Purpose in the baseline spec so the capability summary does not contradict its own modified requirements once this archives.
 6. Roll back by disabling the flag; reader-detected behavior is unchanged and no artifact schema is removed.

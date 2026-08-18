@@ -357,15 +357,23 @@ ARTIFACT_NOTES = {
 STAGE_COLORS = {
     "retain": (0.05, 0.65, 0.15),
     "retain_low_confidence": (0.90, 0.65, 0.05),
+    "retain_unverified": (0.20, 0.45, 0.85),
     "rejected_geometry": (0.85, 0.10, 0.10),
     "rejected_vision": (0.65, 0.10, 0.55),
 }
 STAGE_LABELS = {
     "retain": "INDEXED",
     "retain_low_confidence": "INDEXED (low conf)",
+    "retain_unverified": "INDEXED (no vision)",
     "rejected_geometry": "REJECTED",
     "rejected_vision": "REJECTED (vision)",
 }
+# Order used for the annotated legend and the terminal summary.
+STAGE_ORDER = (
+    "retain", "retain_low_confidence", "retain_unverified",
+    "rejected_geometry", "rejected_vision",
+)
+UNKNOWN_STAGE_COLOR = (0.35, 0.35, 0.35)
 
 
 def _load_local_json(path: str):
@@ -394,6 +402,8 @@ def _verdicts(run_dir: str) -> list[dict]:
             desc = (u.get("understanding") or {}).get("short_description") or ""
             if outcome == "reject":
                 stage, why = "rejected_vision", "vision: not meaningful"
+            elif outcome == "retain_unverified":
+                stage, why = outcome, "indexed from caption — vision call failed"
             else:
                 stage, why = outcome, desc
         out.append({**f, "stage": stage, "why": why})
@@ -406,12 +416,18 @@ def _save_pdf(pdf, out: str) -> str:
     On Windows/WSL an open PDF viewer holds a lock on the file, so overwriting
     raises PermissionError. Failing mid-demo is not acceptable — write a new
     file and say so instead.
+
+    MuPDF raises its own `FzErrorSystem` rather than `PermissionError`, and it
+    truncates the message at a fixed length — with a long path the trailing
+    "Permission denied" is cut mid-word, so an exact substring test misses the
+    very case it exists to catch. Match a prefix of it instead.
     """
     try:
         pdf.save(out, garbage=3, deflate=True)
         return out
     except Exception as exc:
-        if "Permission denied" not in str(exc) and not isinstance(exc, PermissionError):
+        locked = isinstance(exc, PermissionError) or "Permission de" in str(exc)
+        if not locked:
             raise
         stamped = f"{os.path.splitext(out)[0]}-{time.strftime('%H%M%S')}.pdf"
         pdf.save(stamped, garbage=3, deflate=True)
@@ -426,6 +442,13 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
         import fitz
     except ImportError:
         raise SystemExit("PyMuPDF required:  .venv/bin/pip install --no-compile pymupdf")
+
+    # Scanned pages in this corpus carry a synthetic invisible-OCR font that
+    # FreeType cannot parse. MuPDF recovers by substituting a font, but prints
+    # one FT_New_Memory_Face line per page to stderr, which buries the actual
+    # command output. The glyphs are invisible either way, so the warning is
+    # noise, not a signal.
+    fitz.TOOLS.mupdf_display_errors(False)
 
     label = os.path.splitext(os.path.basename(target))[0]
     run_dir = dest or os.path.join(DEFAULT_OUTPUT, label)
@@ -459,10 +482,14 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
             min(xs) * scale, min(ys) * scale, max(xs) * scale, max(ys) * scale
         )
 
-        color = STAGE_COLORS[stage]
+        # An outcome the demo does not know about must not abort the run —
+        # draw it in grey and name it, so a new pipeline stage shows up as
+        # something to look at rather than as a crash.
+        color = STAGE_COLORS.get(stage, UNKNOWN_STAGE_COLOR)
+        label_text = STAGE_LABELS.get(stage, stage.upper())
         page.draw_rect(rect, color=color, width=1.6)
 
-        tag = f"{STAGE_LABELS[stage]} · {f['figure_id']}"
+        tag = f"{label_text} · {f['figure_id']}"
         if stage.startswith("rejected"):
             tag += f" · {f['why'][:38]}"
         tw = fitz.get_text_length(tag, fontname="helv", fontsize=7) + 6
@@ -473,7 +500,7 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
 
         note = page.add_rect_annot(rect)
         note.set_colors(stroke=color)
-        note.set_info(title=STAGE_LABELS[stage], content=f["why"])
+        note.set_info(title=label_text, content=f["why"])
         note.set_opacity(0.85)
         note.update()
 
@@ -484,11 +511,13 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
 
     print(f"\n{BOLD}Annotated{RESET} {os.path.basename(src)} → {GREEN}{out}{RESET}\n")
     total = sum(counts.values())
-    for stage in ("retain", "retain_low_confidence", "rejected_geometry", "rejected_vision"):
+    # Known stages in reading order, then anything unrecognised, so a stage the
+    # demo has not been taught about is still counted in the summary.
+    for stage in (*STAGE_ORDER, *sorted(set(counts) - set(STAGE_ORDER))):
         n = counts.get(stage, 0)
         if n:
             pct = 100 * n / total
-            print(f"  {STAGE_LABELS[stage]:<20} {n:>3}  ({pct:4.1f}%)")
+            print(f"  {STAGE_LABELS.get(stage, stage):<20} {n:>3}  ({pct:4.1f}%)")
     print(f"  {'total detected':<20} {total:>3}")
     print(f"\n{DIM}Hover any box in a PDF viewer to read the reason.{RESET}")
     _try_open(out)
@@ -551,11 +580,11 @@ def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
     swatch_w = max(14.0, 24.0 * scale)
     gap = max(6.0, 10.0 * scale)
 
-    for stage in ("retain", "retain_low_confidence", "rejected_geometry", "rejected_vision"):
+    for stage in (*STAGE_ORDER, *sorted(set(counts) - set(STAGE_ORDER))):
         n = counts.get(stage, 0)
         if not n or y >= bottom:
             continue
-        color = STAGE_COLORS[stage]
+        color = STAGE_COLORS.get(stage, UNKNOWN_STAGE_COLOR)
 
         # Count is right-aligned to the margin rather than parked at a fixed
         # x, so it cannot collide with the label on a narrow page.
@@ -568,7 +597,7 @@ def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
             fitz.Rect(margin, y + f_row * 0.15, margin + swatch_w, y + f_row * 0.95),
             color=color, fill=color,
         )
-        used = _block(STAGE_LABELS[stage], y, f_row, "hebo",
+        used = _block(STAGE_LABELS.get(stage, stage), y, f_row, "hebo",
                       x0=label_x, x1=label_x + label_w)
         _block(count_text, y, f_row, "helv",
                x0=margin + avail - count_w, x1=margin + avail,

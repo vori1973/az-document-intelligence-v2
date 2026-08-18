@@ -43,7 +43,7 @@
 ## 6. Deployment and validation
 
 - [ ] 6.1 Set the new app settings on the Function App and deploy
-- [ ] 6.2 Ingest `162000-159772.pdf` with recovery enabled and confirm pages 6 and 8 produce recovered figures with real polygons
+- [ ] 6.2 Ingest a 16-page clinical reference with recovery enabled and confirm pages 6 and 8 produce recovered figures with real polygons
 - [ ] 6.3 Confirm previously detected figures on that document are unchanged, not duplicated, and still attributed to reader provenance
 - [ ] 6.4 Verify crops of the recovered figures visually match the photographs on those pages
 - [ ] 6.5 Run a retrieval query that finds a recovered figure by its visual content
