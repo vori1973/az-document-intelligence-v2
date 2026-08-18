@@ -50,7 +50,8 @@
 - [ ] 6.6 Reprocess the remaining existing test documents, clearing their `processing/_name-index/` entries first so unchanged bytes are not skipped
 - [ ] 6.7 Record recovery counts across the reprocessed corpus to quantify the detection gap
 
-## 7. Documentation
+## 7. Documentation and spec hygiene
 
 - [ ] 7.1 Update the known-gaps section in `docs/figure-understanding-extension.md` to reflect that the detection gap is now closed for digitally-born pages
 - [ ] 7.2 Document the new configuration settings and the scanned-page limitation that remains
+- [ ] 7.3 Update the `figure-understanding` capability Purpose directly in `openspec/specs/figure-understanding/spec.md` — a delta cannot carry it, because OpenSpec ignores `## Purpose` in a delta for an existing capability. The current sentence ends "...traceable to the exact page and bounding polygon reported by Azure Document Intelligence", which this change's MODIFIED requirements contradict once polygons can also come from the placement cross-check. Replace that clause with "...traceable to an exact page and bounding polygon produced by a deterministic detector rather than inferred by a model." Do this as part of implementation, not before: until recovery ships, the existing sentence is still accurate.

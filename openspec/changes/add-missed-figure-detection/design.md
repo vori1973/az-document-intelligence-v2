@@ -39,6 +39,8 @@ See `proposal.md` for motivation, `specs/figure-detection-recovery/spec.md` for 
 
 - **Provenance is a field on the figure record, not an inference from shape.** Downstream code and humans both need to know which detector produced a figure in order to measure the gap; deriving it from whether a polygon happens to match a placement would be fragile and unmeasurable.
 
+- **The capability's Purpose is updated by editing the baseline spec, not through this delta.** OpenSpec ignores a `## Purpose` block in a delta for an existing capability, so the one-line summary of `figure-understanding` — which currently attributes every citation polygon to Document Intelligence — cannot be corrected by the delta that invalidates it. It is tracked as an implementation task against `openspec/specs/figure-understanding/spec.md` instead, sequenced with the code rather than ahead of it.
+
 ## Risks / Trade-offs
 
 - [Risk] The cross-check surfaces decorative page furniture ADI deliberately ignored, inflating the index → Mitigation: recovered figures pass through the same 4B rejection rules, and recovery counts are reported per run so a spike is visible.
@@ -53,7 +55,8 @@ See `proposal.md` for motivation, `specs/figure-detection-recovery/spec.md` for 
 2. Land the cross-check and provenance in step 4A behind a configuration flag, defaulted off.
 3. Enable on the known corpus, confirm pages 6 and 8 of `162000-159772.pdf` are recovered and that previously detected figures are unchanged and not duplicated.
 4. Reprocess the existing test documents, clearing their name-index entries so identical bytes are not skipped.
-5. Roll back by disabling the flag; reader-detected behavior is unchanged and no artifact schema is removed.
+5. Update the `figure-understanding` Purpose in the baseline spec so the capability summary does not contradict its own modified requirements once this archives.
+6. Roll back by disabling the flag; reader-detected behavior is unchanged and no artifact schema is removed.
 
 ## Open Questions
 
