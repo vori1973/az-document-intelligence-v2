@@ -108,7 +108,12 @@ All service-to-service auth uses the Function App's **system-assigned Managed Id
 ## 📚 Documentation
 
 The architecture diagram above is the **what**. These docs are the **why**,
-split by concern rather than bundled into one file:
+split by concern rather than bundled into one file.
+
+Want the non-technical story first — both features, no code? Start with
+**[docs/PRESENTATION.md](docs/PRESENTATION.md)** instead of the tree below;
+it's standalone and links into these same docs for anyone who wants the
+implementation depth afterward.
 
 ```
 docs/PIPELINE.md ──────────────► the ingestion spine: data sources, the 7
@@ -126,12 +131,12 @@ docs/PIPELINE.md ──────────────► the ingestion spi
 
 | Doc | Read it for |
 |---|---|
-| **[docs/PIPELINE.md](docs/PIPELINE.md)** | **Start here.** Overview, data sources, the 7-step pipeline, confidence routing, citation authority |
+| [docs/PRESENTATION.md](docs/PRESENTATION.md) | **Non-technical narrative** — tables and figures explained together, no code, standalone from any earlier version |
+| **[docs/PIPELINE.md](docs/PIPELINE.md)** | **Start here for implementation.** Overview, data sources, the 7-step pipeline, confidence routing, citation authority |
 | [docs/CHUNKING.md](docs/CHUNKING.md) | why one chunk per table row (not per table, not inlined), paragraph filtering, figure chunk shape |
 | [docs/figure-understanding-extension.md](docs/figure-understanding-extension.md) | the vision-model call: crop → qualify → describe, cost controls, known accuracy gap |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | infrastructure, app settings, RBAC, operations |
 | [docs/DEMO.md](docs/DEMO.md) | presenting the pipeline end to end |
-| [TODO.md](TODO.md) | original design & implementation plan (historical) |
 | [AGENTS.md](AGENTS.md) | conventions for AI coding agents |
 
 New to the project? Start with **PIPELINE.md** — it explains the design
@@ -167,11 +172,11 @@ Runs all steps end-to-end: resource group → Bicep → Key Vault secret → `fu
 az-document-intelligence-v2/
   📄 README.md
   📄 DEPLOYMENT.md          — deployment guide (both paths, RBAC, monitoring)
-  📄 TODO.md                — original design & implementation plan
   📄 AGENTS.md              — conventions for AI coding agents
   |
   📁 docs/
-  |   📄 PIPELINE.md        — ingestion overview: start here
+  |   📄 PRESENTATION.md    — non-technical narrative: tables + figures together
+  |   📄 PIPELINE.md        — ingestion overview: start here for implementation
   |   📄 CHUNKING.md        — table-row / paragraph / figure chunk design
   |   📄 figure-understanding-extension.md  — the vision-model step
   |   📄 DEMO.md            — demo runbook
