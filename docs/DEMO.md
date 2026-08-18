@@ -430,7 +430,7 @@ credible, concrete war story if the audience is technical.
 ## Why the demo doesn't use Foundry's chat UI
 
 Short answer: **the index has no vectorizer**, so Foundry can't run vector
-search against it.
+search against it. Tracked as [Phase 2 gap #2](ALGORITHM.md#2-no-server-side-vectorizer-on-the-index).
 
 ### The mechanics
 

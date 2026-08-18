@@ -5,6 +5,10 @@
 > and GitHub issue [#4](https://github.com/vori1973/az-document-intelligence-v2/issues/4).
 > This document is the original design; the OpenSpec change is the source of truth
 > for what was actually built. Operational settings live in [DEPLOYMENT.md](../DEPLOYMENT.md#figure-understanding-settings).
+>
+> **Known gap:** figures are currently described **without surrounding page text
+> or document context**, which measurably weakens retrieval for uncaptioned
+> figures. See [ALGORITHM.md → Phase 2](ALGORITHM.md#1-figures-are-described-without-page-context--highest-impact).
 
 ## Purpose
 

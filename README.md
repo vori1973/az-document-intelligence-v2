@@ -104,6 +104,22 @@ All service-to-service auth uses the Function App's **system-assigned Managed Id
 
 ---
 
+## 📚 Documentation
+
+| Doc | Read it for |
+|---|---|
+| **[docs/ALGORITHM.md](docs/ALGORITHM.md)** | **How the pipeline works and why** — data sources, routing, chunking rationale, citation authority, and the [Phase 2 gap list](docs/ALGORITHM.md#phase-2--known-gaps) |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | infrastructure, app settings, RBAC, operations |
+| [docs/DEMO.md](docs/DEMO.md) | presenting the pipeline end to end |
+| [docs/figure-understanding-extension.md](docs/figure-understanding-extension.md) | full figure-understanding design |
+| [TODO.md](TODO.md) | original design & implementation plan (historical) |
+| [AGENTS.md](AGENTS.md) | conventions for AI coding agents |
+
+New to the project? Start with **ALGORITHM.md** — it explains the design
+decisions the code assumes you already understand.
+
+---
+
 ## 🚀 Quick Start
 
 See **[DEPLOYMENT.md](DEPLOYMENT.md)** for full instructions.
@@ -132,6 +148,13 @@ az-document-intelligence-v2/
   📄 README.md
   📄 DEPLOYMENT.md          — deployment guide (both paths, RBAC, monitoring)
   📄 TODO.md                — original design & implementation plan
+  📄 AGENTS.md              — conventions for AI coding agents
+  |
+  📁 docs/
+  |   📄 ALGORITHM.md       — how the pipeline works, why, and Phase 2 gaps
+  |   📄 DEMO.md            — demo runbook
+  |   📄 figure-understanding-extension.md
+  |   📁 diagrams/          — chunking strategy SVG
   |
   📁 infra/                 — Bicep IaC
   |   📄 main.bicep
@@ -165,15 +188,14 @@ az-document-intelligence-v2/
   |       types.py
   |
   📁 scripts/
-  |   deploy.sh
+  |   deploy.sh               — end-to-end deploy
+  |   demo.py                 — demo driver (upload/watch/show/annotate/ask/chat/pull)
   |
-  |   📁 load-test/           — Azure AI Search load testing & advisor tools
-  |       📄 README.md        — full usage guide
-  |       seed_index.py       — inject synthetic chunks to reach realistic index size
-  |       load_test.py        — async concurrent load runner (concurrency, profile, retries)
-  |       advisor.py          — reads results/ → prints replica recommendations
-  |       embed_queries.py    — one-time: pre-embed queries via Azure OpenAI
-  |       📁 kql/             — Log Analytics queries (throttling, latency, saturation)
+  📁 demo-assets/
+  |   📁 docs/                — source PDFs (folder tracked, contents ignored)
+  |   📁 output/              — pulled runs   (folder tracked, contents ignored)
+  |
+  📁 openspec/                — change proposals & specs
   |
   📁 tests/
       📁 unit/ · 📁 integration/
@@ -183,19 +205,12 @@ az-document-intelligence-v2/
 
 ## 🧪 Load Testing
 
-`scripts/load-test/` contains an educational load-testing toolkit for the Azure AI Search index.
-
-| Tool | Purpose |
-|------|---------|
-| `seed_index.py` | Inject synthetic chunks to simulate realistic index sizes (50k–200k docs) before load testing. Uses random unit vectors — no pipeline required. |
-| `load_test.py` | Async concurrent load runner. Configurable concurrency, duration, query profile (vector / hybrid / semantic), and SDK retry behaviour. |
-| `advisor.py` | Reads `results/` and prints replica scaling recommendations with threshold rules. |
-| `kql/` | Log Analytics queries for throttling rate, latency trend, and the replica saturation pattern (QPS plateau + latency climb). |
-
-See **[scripts/load-test/README.md](scripts/load-test/README.md)** for the full workflow including RBAC setup, seeding guidance, and how to interpret results.
+Search load testing lives in a **separate project**,
+[`az-search-load-test`](https://github.com/vori1973/az-search-load-test) — it
+benchmarks any Azure AI Search index and has no dependency on this pipeline.
 
 > **Note:** Azure Search S1 degrades under load via latency (queuing), not HTTP 429s.
-> The saturation signal is QPS plateauing while p95 climbs — visible in `saturation.kql`.
+> The saturation signal is QPS plateauing while p95 climbs.
 
 ---
 
@@ -241,6 +256,6 @@ Currently `OCR_ENABLED=false` — ADI handles all pages. Mistral OCR activates w
 
 ## 🔗 Evolved From
 
-This project is v2 of [az-document-intelligence](../az-document-intelligence) — a local TypeScript pipeline. v2 ports the extraction and chunking logic to Python and lifts it fully into Azure: Event Grid replaces the CLI entrypoint, Durable Functions replace the sequential orchestrator, Blob Storage replaces the local `output/` directory, and Managed Identity replaces `.env` API keys.
+This project is v2 of an earlier local **TypeScript** pipeline. v2 ports the extraction and chunking logic to Python and lifts it fully into Azure: Event Grid replaces the CLI entrypoint, Durable Functions replace the sequential orchestrator, Blob Storage replaces the local `output/` directory, and Managed Identity replaces `.env` API keys.
 
-The routing rules, chunk schema, ADI normalization passes, and AI Search index structure are preserved from v1.
+The routing rules, chunk schema, ADI normalization passes, and AI Search index structure are preserved from v1. **This repository is standalone** — the design rationale carried over from v1 is documented in [docs/ALGORITHM.md](docs/ALGORITHM.md), so no access to the original project is required.
