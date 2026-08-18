@@ -22,7 +22,7 @@ an exact citation — document → page → table → row → bounding polygon.*
 - [Pipeline stages](#pipeline-stages)
 - [Confidence-based routing](#confidence-based-routing-step-3)
 - [Citation authority](#citation-authority)
-- [Phase 2 — known gaps](#phase-2--known-gaps)
+- [Phase 2 — known gaps](#phase-2-known-gaps)
 
 ---
 

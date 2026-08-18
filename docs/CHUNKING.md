@@ -25,7 +25,8 @@ The goal: **every chunk is independently answerable with an exact citation.**
 
 ## Table of contents
 
-- [Table row chunks](#table-row-chunks--one-row-per-chunk)
+- [Table row chunks](#table-row-chunks-one-row-per-chunk)
+- [ADI/OCR merge and cell-grid normalization](#adiocr-merge-and-cell-grid-normalization)
 - [Paragraph chunks](#paragraph-chunks)
 - [Figure chunks](#figure-chunks)
 - [Why three types, retrieved together](#why-three-types-retrieved-together)
@@ -72,6 +73,52 @@ Two details that matter for ranking:
   user instructions. The following color-code is used within the Header:"*).
   Must exceed `CHUNK_LEAD_IN_MIN_CHARS` (default 30) to exclude UI labels and
   lone numbers.
+
+---
+
+## ADI/OCR merge and cell-grid normalization
+
+Before a table becomes `table_row` chunks, its cells go through span
+resolution, then (when OCR is enabled) a routing decision between ADI's and
+OCR's reading of the same table. This logic is ported unchanged from v1 and
+lives in `step5_chunks.py`; **all of it runs even while OCR is disabled** —
+merged-cell resolution is not an OCR feature, only the routing choice is.
+
+**1. Cell-grid resolution (`_build_adi_cell_grid`)** — ADI reports merged
+cells as one cell with a `row_span`/`column_span`; chunking needs a flat
+per-cell grid. Each spanning cell's content is copied into every `(row, col)`
+position it covers, and non-origin span rows are marked so later passes can
+tell "genuinely empty" apart from "empty because it's mid-span."
+
+**2. Implicit row-span fill (`_normalize_adi_grid`)** — ADI sometimes detects
+the row-span on the label column but not on the value columns next to it, so
+values end up on only one row instead of every row in the visual group. For
+each run of rows sharing the same label, if exactly one row in the run has a
+non-empty value, that value is propagated to the rest of the run; if multiple
+rows disagree, they're left alone as genuine per-row data. Runs on **every**
+table, ADI-only or OCR, and is the input both paths chunk from.
+
+**3. ADI-vs-OCR routing** (only matters once
+[OCR is enabled](PIPELINE.md#3-ocr-markdown-the-second-reader-currently-disabled)):
+compares Mistral's data-row count against ADI's; a mismatch, a table with 3+
+header rows (OCR sub-headers would be miscounted as data), or ADI reporting
+very low cell confidence with zero OCR tables on the page (`image_artifact` —
+ADI likely mistook a chart/photo for a table) all fall back to
+`_normalize_adi_grid`'s output instead of trusting OCR.
+
+**4. OCR two-pass fill** (`_normalize_mistral_table`, OCR path only) — OCR
+tables need their own merge recovery, done as fill-right then fill-down
+*in that order* (row spans overwrite blanks that a later fill-right check
+depends on): fill-right restores column-span fragments split by ADI
+(`"300 Cases"` split into `"300"` + `""`), fill-down restores row-span
+values using ADI's grid as an override when the OCR model splits one
+merged cell's text across multiple rows instead of repeating it.
+
+Every table's routing decision and flags (`row_count_mismatch`,
+`mistral_multi_header`, `image_artifact`, `high_empty_ratio`) are written to
+`tables-flags.md`/`tables-stats.md` alongside the run so a low-confidence
+table can be traced back to the specific rule that chose its source — see
+[DEMO.md](DEMO.md) for pulling these diagnostics for a real run.
 
 ---
 

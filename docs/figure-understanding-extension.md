@@ -67,6 +67,93 @@ Vision-generated descriptions improve retrieval and understanding, but they do n
 
 ---
 
+## Problem Decomposition
+
+### 1. Detection
+
+Identify graphical regions and their location.
+
+Primary ADI signals:
+
+- `figures[]`
+- `boundingRegions[]`
+- page number
+- polygon coordinates
+- caption content and spans, when present
+- page dimensions
+- paragraph roles
+- content and paragraph spans
+
+### 2. Qualification
+
+Determine whether a candidate carries useful knowledge.
+
+Potentially meaningful:
+
+- device photographs
+- device components
+- procedure illustrations
+- anatomical illustrations
+- charts and diagrams
+- operational screenshots
+- meaningful safety symbols
+- composite figures
+
+Likely noise:
+
+- logos
+- decorative bars
+- separators
+- headers and footers
+- page backgrounds
+- blank or partial crops
+- unreferenced small icons
+
+Media references (separate lane, not noise):
+
+- embedded video streams
+- linked video URIs
+- QR codes pointing to video or audio
+- audio annotations
+- 3D model references
+
+### 3. Understanding and verbalization
+
+Create a grounded textual representation of a retained figure:
+
+- category
+- short description
+- visible labels
+- device or component terms
+- procedure actions visible in the figure
+- warnings visibly present
+- uncertainty
+
+### 4. Association
+
+Link each retained figure to the content it supports:
+
+```text
+figure -> ADI caption
+figure -> paragraph
+figure -> procedure step
+figure -> table
+figure -> section heading
+figure -> warning or note
+```
+
+### 5. Retrieval
+
+Support multiple retrieval paths:
+
+- keyword retrieval over captions and labels
+- vector retrieval over figure verbalizations
+- multimodal image-text embeddings
+- optional multi-vector or late-interaction page retrieval
+- relationship expansion from text to figures and figures to text
+
+---
+
 ## Model and Feature Policy
 
 ### Customer-approved models
@@ -167,93 +254,6 @@ The POC should also benchmark these optional paths when available and approved:
 - late-interaction visual document retrieval
 
 The final architecture is selected from measured retrieval quality, not from an assumption that verbalization alone is sufficient.
-
----
-
-## Problem Decomposition
-
-### 1. Detection
-
-Identify graphical regions and their location.
-
-Primary ADI signals:
-
-- `figures[]`
-- `boundingRegions[]`
-- page number
-- polygon coordinates
-- caption content and spans, when present
-- page dimensions
-- paragraph roles
-- content and paragraph spans
-
-### 2. Qualification
-
-Determine whether a candidate carries useful knowledge.
-
-Potentially meaningful:
-
-- device photographs
-- device components
-- procedure illustrations
-- anatomical illustrations
-- charts and diagrams
-- operational screenshots
-- meaningful safety symbols
-- composite figures
-
-Likely noise:
-
-- logos
-- decorative bars
-- separators
-- headers and footers
-- page backgrounds
-- blank or partial crops
-- unreferenced small icons
-
-Media references (separate lane, not noise):
-
-- embedded video streams
-- linked video URIs
-- QR codes pointing to video or audio
-- audio annotations
-- 3D model references
-
-### 3. Understanding and verbalization
-
-Create a grounded textual representation of a retained figure:
-
-- category
-- short description
-- visible labels
-- device or component terms
-- procedure actions visible in the figure
-- warnings visibly present
-- uncertainty
-
-### 4. Association
-
-Link each retained figure to the content it supports:
-
-```text
-figure -> ADI caption
-figure -> paragraph
-figure -> procedure step
-figure -> table
-figure -> section heading
-figure -> warning or note
-```
-
-### 5. Retrieval
-
-Support multiple retrieval paths:
-
-- keyword retrieval over captions and labels
-- vector retrieval over figure verbalizations
-- multimodal image-text embeddings
-- optional multi-vector or late-interaction page retrieval
-- relationship expansion from text to figures and figures to text
 
 ---
 
