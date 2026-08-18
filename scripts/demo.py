@@ -10,7 +10,8 @@ Usage:
   .venv/bin/python scripts/demo.py watch <file|blob>    # follow a run (waits for it to appear)
   .venv/bin/python scripts/demo.py show  <file|blob>    # figures.json / understanding / chunks
   .venv/bin/python scripts/demo.py crop  <file|blob> <page> <fig>
-  .venv/bin/python scripts/demo.py ask "question"       # grounded Q&A over the index
+  .venv/bin/python scripts/demo.py chat                 # interactive chat with citations
+  .venv/bin/python scripts/demo.py ask "question"       # one-shot grounded Q&A
   .venv/bin/python scripts/demo.py figures "query"      # visual retrieval only
   .venv/bin/python scripts/demo.py pull  <file|blob>    # download all artifacts locally
 
@@ -366,7 +367,7 @@ def _retrieve(query: str, k: int = 8, only_figures: bool = False) -> list[dict]:
     body = {
         "search": query,
         "top": k,
-        "select": "id,type,page,source_file,image_blob,text_for_embedding",
+        "select": "id,type,page,source_file,image_blob,text_for_embedding,document_id",
         "vectorQueries": [
             {"kind": "vector", "vector": _embed(query), "fields": "embedding", "k": k}
         ],
@@ -390,46 +391,195 @@ def cmd_figures(query: str) -> None:
 
 
 SYSTEM = (
-    "You answer questions about technical/medical documents using ONLY the numbered "
+    "You answer questions about technical documents using ONLY the numbered "
     "sources provided. Cite every claim as [n]. Sources marked [Figure] came from a "
     "vision model reading the image — when you use one, say which page's figure it was. "
     "If the sources do not contain the answer, say so plainly rather than guessing."
 )
 
 
-def cmd_ask(question: str) -> None:
-    hits = _retrieve(question, k=8)
-    print(f"\n{BOLD}Q:{RESET} {question}\n{DIM}retrieved {len(hits)} chunks{RESET}\n")
+def _answer(question: str, hits: list[dict], history: list[dict] | None = None) -> str:
     context = "\n\n".join(
         f"[{i+1}] ({d['type']}, page {d['page']}, {os.path.basename(d['source_file'])})"
         f"\n{d.get('text_for_embedding','')}"
         for i, d in enumerate(hits)
     )
+    messages = [{"role": "system", "content": SYSTEM}]
+    messages += history or []
+    messages.append(
+        {"role": "user", "content": f"Sources:\n{context}\n\nQuestion: {question}"}
+    )
+    resp = _aoai().chat.completions.create(
+        model=CHAT_MODEL, messages=messages, temperature=0
+    )
+    return resp.choices[0].message.content
+
+
+def _print_sources(hits: list[dict]) -> None:
+    print(f"{DIM}── sources ──{RESET}")
+    for i, d in enumerate(hits):
+        tag = f"{CYAN}[Figure]{RESET} " if d["type"] == "figure" else "         "
+        img = f"  {DIM}{d.get('image_blob')}{RESET}" if d.get("image_blob") else ""
+        print(f"  [{i+1}] {tag}p{d['page']:<4} {os.path.basename(d['source_file'])[:38]}{img}")
+
+
+def cmd_ask(question: str) -> None:
+    hits = _retrieve(question, k=8)
+    print(f"\n{BOLD}Q:{RESET} {question}\n{DIM}retrieved {len(hits)} chunks{RESET}\n")
+    print(f"{BOLD}A:{RESET} {_answer(question, hits)}\n")
+    _print_sources(hits)
+
+
+def _standalone(question: str, history: list[dict]) -> str:
+    """Rewrite a follow-up into a self-contained query.
+
+    'What about the Pro?' retrieves nothing on its own — it has to carry the
+    context of the previous turns before it hits the index.
+    """
+    if not history:
+        return question
+    turns = "\n".join(
+        f"{m['role']}: {m['content'][:300]}" for m in history[-4:]
+    )
     resp = _aoai().chat.completions.create(
         model=CHAT_MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"Sources:\n{context}\n\nQuestion: {question}"},
+            {"role": "system", "content":
+                "Rewrite the user's latest question as a standalone search query that "
+                "makes sense without the conversation. Resolve pronouns and implied "
+                "subjects. Output only the query, nothing else."},
+            {"role": "user", "content": f"Conversation:\n{turns}\n\nLatest question: {question}"},
         ],
         temperature=0,
     )
-    print(f"{BOLD}A:{RESET} {resp.choices[0].message.content}\n")
-    print(f"{DIM}── sources ──{RESET}")
-    for i, d in enumerate(hits):
-        tag = f"{CYAN}[Figure]{RESET} " if d["type"] == "figure" else ""
-        img = f"  {DIM}{d.get('image_blob')}{RESET}" if d.get("image_blob") else ""
-        print(f"  [{i+1}] {tag}p{d['page']} {os.path.basename(d['source_file'])[:40]}{img}")
+    return resp.choices[0].message.content.strip() or question
+
+
+CHAT_HELP = f"""{BOLD}Commands{RESET}
+  {CYAN}/figure N{RESET}    open the crop behind source [N]
+  {CYAN}/sources{RESET}     re-print the last sources
+  {CYAN}/docs{RESET}        what's in the index
+  {CYAN}/reset{RESET}       clear conversation history
+  {CYAN}/help{RESET}        this
+  {CYAN}/quit{RESET}        exit  (or Ctrl-D)
+"""
+
+
+def cmd_chat(*_: str) -> None:
+    """Interactive grounded chat with citations and inline figure display."""
+    print(f"\n{BOLD}Document chat{RESET}  {DIM}{CHAT_MODEL} · grounded in the search index{RESET}")
+    print(f"{DIM}Ask a question. /help for commands, /quit to exit.{RESET}\n")
+
+    history: list[dict] = []
+    last_hits: list[dict] = []
+
+    while True:
+        try:
+            q = input(f"{BOLD}{GREEN}you ▸{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not q:
+            continue
+
+        if q.startswith("/"):
+            cmd, *rest = q[1:].split(maxsplit=1)
+            if cmd in ("quit", "exit", "q"):
+                return
+            if cmd == "help":
+                print(CHAT_HELP)
+            elif cmd == "reset":
+                history, last_hits = [], []
+                print(f"{DIM}history cleared{RESET}\n")
+            elif cmd == "sources":
+                _print_sources(last_hits) if last_hits else print(f"{DIM}nothing yet{RESET}")
+                print()
+            elif cmd == "docs":
+                cmd_ls()
+            elif cmd == "figure":
+                _open_source_figure(last_hits, rest[0] if rest else "")
+            else:
+                print(f"{YELLOW}unknown command{RESET} — /help\n")
+            continue
+
+        search_q = _standalone(q, history)
+        if search_q.lower() != q.lower():
+            print(f"{DIM}   ↳ searching: {search_q}{RESET}")
+
+        hits = _retrieve(search_q, k=8)
+        if not hits:
+            print(f"{YELLOW}No matching chunks — is anything indexed?{RESET}\n")
+            continue
+
+        answer = _answer(q, hits, history)
+        last_hits = hits
+
+        print(f"\n{BOLD}{CYAN}bot ▸{RESET} {answer}\n")
+        _print_sources(hits)
+        figs = [i + 1 for i, d in enumerate(hits) if d["type"] == "figure"]
+        if figs:
+            print(f"{DIM}  /figure {figs[0]} to view a cited image{RESET}")
+        print()
+
+        history += [
+            {"role": "user", "content": q},
+            {"role": "assistant", "content": answer},
+        ]
+        history = history[-8:]
+
+
+def _open_source_figure(hits: list[dict], arg: str) -> None:
+    if not hits:
+        print(f"{YELLOW}Ask something first.{RESET}\n")
+        return
+    try:
+        idx = int(arg.strip()) - 1
+        hit = hits[idx]
+    except (ValueError, IndexError):
+        print(f"{YELLOW}Usage: /figure N  (1–{len(hits)}){RESET}\n")
+        return
+    if not hit.get("image_blob"):
+        print(f"{YELLOW}Source [{idx+1}] is text, not a figure.{RESET}\n")
+        return
+
+    doc_id = hit["document_id"]
+    prefix = _run_prefix(doc_id)
+    blob = f"{prefix}/{hit['image_blob']}"
+    out = os.path.join("/tmp", os.path.basename(hit["image_blob"]))
+    try:
+        data = _blobs().get_container_client("processing").get_blob_client(blob).download_blob().readall()
+    except Exception as exc:
+        print(f"{YELLOW}Could not fetch {blob}: {exc}{RESET}\n")
+        return
+    with open(out, "wb") as fh:
+        fh.write(data)
+    print(f"{GREEN}Saved{RESET} {out}  {DIM}(page {hit['page']}){RESET}")
+    _try_open(out)
+    print()
+
+
+def _try_open(path: str) -> None:
+    """Best-effort: show the image in the host's default viewer."""
+    import shutil
+    import subprocess
+    for cmd in (["wslview"], ["xdg-open"], ["open"]):
+        if shutil.which(cmd[0]):
+            subprocess.Popen(cmd + [path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+    if _is_wsl() and shutil.which("explorer.exe"):
+        win = subprocess.run(["wslpath", "-w", path], capture_output=True, text=True).stdout.strip()
+        subprocess.Popen(["explorer.exe", win], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def main() -> None:
-    if len(sys.argv) < 2 or (len(sys.argv) < 3 and sys.argv[1] != "ls"):
+    if len(sys.argv) < 2 or (len(sys.argv) < 3 and sys.argv[1] not in ("ls", "chat")):
         print(__doc__)
         sys.exit(1)
     cmd, args = sys.argv[1], sys.argv[2:]
     {
         "upload": cmd_upload, "watch": cmd_watch, "show": cmd_show,
         "crop": cmd_crop, "ask": cmd_ask, "figures": cmd_figures,
-        "ls": cmd_ls, "pull": cmd_pull,
+        "ls": cmd_ls, "pull": cmd_pull, "chat": cmd_chat,
     }[cmd](*args)
 
 

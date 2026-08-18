@@ -320,6 +320,61 @@ domain, refusing is the feature."*
 
 ---
 
+## Act 3.5 — Interactive chat (optional, ~3 min)
+
+If the room starts asking their own questions, drop into the chat REPL instead
+of re-running `ask` each time. It keeps conversation history, so **follow-ups
+work**:
+
+```bash
+.venv/bin/python scripts/demo.py chat
+```
+
+```
+you ▸ What NPU performance does the Copilot+ PC have?
+
+bot ▸ The Microsoft Surface Copilot+ PC has an NPU performance of 40-48 TOPS [1][6].
+
+you ▸ What about the AI PC?
+   ↳ searching: What is the NPU performance of the AI PC?
+
+bot ▸ The Microsoft Surface AI PC has an NPU performance of less than 40 TOPS [3].
+```
+
+The `↳ searching:` line is worth calling out: *"'What about the AI PC?' retrieves
+nothing on its own. We rewrite it into a standalone query before it hits the
+index — that's what makes multi-turn RAG work."*
+
+**In-chat commands:**
+
+| Command | Does |
+|---|---|
+| `/figure N` | downloads the crop behind citation `[N]` and opens it |
+| `/sources` | re-prints the last source list |
+| `/docs` | what's currently indexed |
+| `/reset` | clears history (use between topics) |
+| `/quit` | exit (or Ctrl-D) |
+
+`/figure` is the strong beat — ask for something visual, then open the actual
+pixels behind the citation:
+
+```
+you ▸ Show me images of students using laptops outdoors
+
+bot ▸ ...a group of students walking outside, two girls smiling and holding
+      laptops, as illustrated in the figure on page 8 [1].
+
+  [1] [Figure] p8   MicrosoftSurfaceCatalog.pdf  figures/p8-fig24.png
+
+you ▸ /figure 1
+Saved /tmp/p8-fig24.png  (page 8)
+```
+
+The image opens in your viewer. **Say:** *"Claim, citation, page, and the exact
+crop the vision model read — end to end, no hand-waving."*
+
+---
+
 ## Act 4 — Close (~1 min)
 
 Point at the citation trail: every answer carries document, **page**, bounding
@@ -445,7 +500,8 @@ demo.py upload <pdf>              # fast parallel upload + stream step results
 demo.py watch  <pdf|blob-name>    # follow a run; waits if the blob isn't there yet
 demo.py show   <pdf|blob-name>    # qualification, understanding record, chunks
 demo.py crop   <pdf|blob-name> <pg> <n>   # save a crop to /tmp
-demo.py ask    "question"         # grounded Q&A with cited figure sources
+demo.py ask    "question"         # one-shot grounded Q&A with cited figure sources
+demo.py chat                      # interactive multi-turn chat; /figure N opens a crop
 demo.py figures "query"           # visual retrieval only
 demo.py pull   <pdf|blob-name>    # download all artifacts to demo-assets/output/
 ```
