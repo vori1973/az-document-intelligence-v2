@@ -80,6 +80,17 @@ PAGE_UNDERSTANDING_MODEL=<approved-multimodal-gpt-model>
 VISUAL_EMBEDDING_MODEL=<approved-visual-embedding-model>
 ```
 
+> **Deployment status:** only `FIGURE_UNDERSTANDING_PROVIDER` /
+> `FIGURE_UNDERSTANDING_MODEL` are live — they configure the Step 4C call this
+> document describes, one call per qualified **figure crop**. `PAGE_UNDERSTANDING_MODEL`
+> and `VISUAL_EMBEDDING_MODEL` are config slots reserved for capabilities in
+> [Phase 2/3](#delivery-phases) that were never built: sending the model a
+> **full-page render** (not a crop) when ADI's figure detection may have missed
+> vector content, and embedding the image itself rather than its text
+> description. Neither replaces ADI or OCR — see
+> [PIPELINE.md](PIPELINE.md#data-sources) for what actually reads the document
+> text.
+
 **Practical guidance on model size:**
 
 The figure-understanding call (Step 4C) combines classification and description in a single structured request. Task complexity varies:
