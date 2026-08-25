@@ -35,10 +35,23 @@
 
 - [x] 6.1 Run `.venv/bin/python -m pytest tests/ -q`
 - [ ] 6.2 Re-run the technique guide and confirm figures are described past page 22 and placeholder chunks are gone
-- [ ] 6.3 Re-run the product catalog and confirm all 195 qualified figures are analyzed and `budget_bound` is false
+- [x] 6.3 Re-run the product catalog and confirm all 195 qualified figures are analyzed and `budget_bound` is false
+
+  Confirmed via live deployment (`docintv2-dev-rg`): `step4c-result.json` reports
+  `qualified_count: 195, analyzed_count: 195, budget_bound: false` (191 retained,
+  4 rejected as out-of-scope). `chunks.json` contains 191 figure chunks, zero of
+  which are empty placeholders (`"[Figure]  (Page N)"`).
 - [x] 6.4 Confirm orchestrator activity timeouts tolerate the ceiling case, since 4C wall-clock grows with analyzed count
 
-  `src/host.json` allows 30 minutes. Extrapolating the measured 47 seconds for
-  195 figures at concurrency 4 gives roughly 2 minutes for the 500-figure
-  ceiling, leaving substantial headroom.
+  `src/host.json` allows 30 minutes. Measured live: 195 figures at concurrency 4
+  took 134.3s wall-clock (`step4c-result.json` `duration_ms: 134319`).
+  Extrapolating linearly, the 500-figure ceiling would take roughly 5.7 minutes,
+  still well within the 30-minute activity timeout.
 - [ ] 6.5 Record measured cost and wall-clock for both documents in the change folder before archiving
+
+  **Product catalog** (159 pages, 195 qualified figures, model `gpt-4o-mini`):
+  134.3s wall-clock for figure understanding; cost ≈ 195 × $0.0023 ≈ **$0.45**,
+  matching the design doc's estimate. Full artifacts in
+  `demo-assets/output/DPS Sports Medicine Product Catalog v1.2 April 2023/`.
+
+  **Technique guide**: pending — re-run and record before archiving.
