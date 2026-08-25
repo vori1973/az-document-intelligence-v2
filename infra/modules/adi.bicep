@@ -13,6 +13,7 @@ resource adi 'Microsoft.CognitiveServices/accounts@2023-05-01' = {
   kind: 'FormRecognizer'
   sku: { name: sku }
   properties: {
+    disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
     networkAcls: { defaultAction: 'Allow' }
   }

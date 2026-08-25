@@ -14,8 +14,14 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   kind: 'StorageV2'
   properties: {
     accessTier: 'Hot'
+    allowSharedKeyAccess: false
     allowBlobPublicAccess: false
     minimumTlsVersion: 'TLS1_2'
+    // Required for func/Kudu zip-deploy: this Flex Consumption Function App has no VNet
+    // integration or private endpoint to the storage account, so deployment content
+    // (Kudu zip upload) needs public network reachability. Access is still locked down
+    // via AAD-only auth (allowSharedKeyAccess: false) and RBAC.
+    publicNetworkAccess: 'Enabled'
   }
 }
 

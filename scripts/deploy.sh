@@ -159,11 +159,10 @@ echo "      OK"
 
 # ── Step 7: Wire Event Grid subscriptions (requires functions to exist) ───
 SYSTEM_TOPIC_NAME=$(echo "${DEPLOYMENT_OUTPUT}" | jq -r '.properties.outputs.systemTopicName.value // empty')
-if [[ -z "${SYSTEM_TOPIC_NAME}" ]]; then
-  SYSTEM_TOPIC_NAME="${storageAccountName}-topic"
-fi
 STORAGE_ACCOUNT_NAME=$(echo "${STORAGE_URL}" | sed 's|https://||;s|\.blob.*||')
-SYSTEM_TOPIC_NAME="${STORAGE_ACCOUNT_NAME}-topic"
+if [[ -z "${SYSTEM_TOPIC_NAME}" ]]; then
+  SYSTEM_TOPIC_NAME="${STORAGE_ACCOUNT_NAME}-topic"
+fi
 
 echo ""
 echo "[5/5] Creating Event Grid subscriptions..."

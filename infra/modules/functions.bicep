@@ -52,6 +52,21 @@ param figureUnderstandingEnabled string = 'true'
 @description('Vision-capable model deployment used to describe figures')
 param figureUnderstandingModel string = 'gpt-4o-mini'
 
+@description('Vision model deployment used for documents at or below the premium figure threshold')
+param figureModelPremium string = figureUnderstandingModel
+
+@description('Vision model deployment used for documents above the premium figure threshold')
+param figureModelEconomy string = figureUnderstandingModel
+
+@description('Maximum analyzed figures that use the premium vision model')
+param figurePremiumMaxFigures int = 60
+
+@description('Qualified figures allowed per document page')
+param figurePerPageAllowance int = 4
+
+@description('Absolute maximum figures analyzed per document')
+param figureMaxPerDocCeiling int = 500
+
 resource plan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: planName
   location: location
@@ -117,9 +132,13 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'OCR_MAX_CONCURRENT_PAGES', value: '5' }
         { name: 'FIGURE_UNDERSTANDING_ENABLED', value: figureUnderstandingEnabled }
         { name: 'FIGURE_UNDERSTANDING_MODEL', value: figureUnderstandingModel }
+        { name: 'FIGURE_MODEL_PREMIUM', value: figureModelPremium }
+        { name: 'FIGURE_MODEL_ECONOMY', value: figureModelEconomy }
+        { name: 'FIGURE_PREMIUM_MAX_FIGURES', value: string(figurePremiumMaxFigures) }
         { name: 'FIGURE_CROP_DPI', value: '200' }
         { name: 'FIGURE_MAX_CONCURRENT', value: '4' }
-        { name: 'FIGURE_MAX_PER_DOC', value: '60' }
+        { name: 'FIGURE_PER_PAGE_ALLOWANCE', value: string(figurePerPageAllowance) }
+        { name: 'FIGURE_MAX_PER_DOC_CEILING', value: string(figureMaxPerDocCeiling) }
         { name: 'PIPELINE_VERSION', value: 'v2.0' }
       ]
     }

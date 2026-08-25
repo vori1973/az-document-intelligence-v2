@@ -157,6 +157,19 @@ class FigureCandidate(BaseModel):
     features: Optional[FigureFeatures] = None
 
 
+class Step4CResult(BaseModel):
+    understood: int
+    retained: int
+    rejected: int
+    outcomes: dict[str, int] = Field(default_factory=dict)
+    model: str
+    duration_ms: int
+    qualified_count: int
+    budget: int
+    analyzed_count: int
+    budget_bound: bool
+
+
 # ── Pipeline aggregate ────────────────────────────────────────────────────
 
 

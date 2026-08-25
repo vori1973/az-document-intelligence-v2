@@ -18,7 +18,8 @@ export CORPUS=demo-assets/docs
 | One large doc (100+ pages) | Shows qualification filtering at scale |
 | A 1-page extract | Guaranteed-fast live upload |
 
-Under ~60 figures gets 100% vision coverage (`FIGURE_MAX_PER_DOC`).
+Vision coverage is budgeted at four qualified figures per page, up to 500 per
+document (`FIGURE_PER_PAGE_ALLOWANCE`, `FIGURE_MAX_PER_DOC_CEILING`).
 
 ## Naming
 

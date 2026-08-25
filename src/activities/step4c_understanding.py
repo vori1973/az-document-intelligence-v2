@@ -27,14 +27,18 @@ from openai import AzureOpenAI
 from shared.auth import get_openai_token_provider
 from shared.blob_client import download_artifact, download_json_artifact, upload_json_artifact
 from shared.telemetry import timed_step, track_metric
-from models.types import FigureCandidate
+from models.types import FigureCandidate, Step4CResult
 
 logger = logging.getLogger(__name__)
 
 AOAI_ENDPOINT = os.environ.get("AOAI_ENDPOINT", "")
 FIGURE_MODEL = os.environ.get("FIGURE_UNDERSTANDING_MODEL", "gpt-4o-mini")
+FIGURE_MODEL_PREMIUM = os.environ.get("FIGURE_MODEL_PREMIUM", FIGURE_MODEL)
+FIGURE_MODEL_ECONOMY = os.environ.get("FIGURE_MODEL_ECONOMY", FIGURE_MODEL)
+FIGURE_PREMIUM_MAX_FIGURES = int(os.environ.get("FIGURE_PREMIUM_MAX_FIGURES", "60"))
 MAX_CONCURRENT = int(os.environ.get("FIGURE_MAX_CONCURRENT", "4"))
-MAX_FIGURES = int(os.environ.get("FIGURE_MAX_PER_DOC", "60"))
+FIGURE_PER_PAGE_ALLOWANCE = int(os.environ.get("FIGURE_PER_PAGE_ALLOWANCE", "4"))
+FIGURE_MAX_PER_DOC_CEILING = int(os.environ.get("FIGURE_MAX_PER_DOC_CEILING", "500"))
 API_VERSION = "2024-10-21"
 
 RETRY_DELAYS = [2.0, 4.0, 8.0]
@@ -124,7 +128,11 @@ def _build_user_content(candidate: FigureCandidate, image_b64: str) -> list[dict
 
 
 def _understand_one(
-    client: AzureOpenAI, doc_id: str, run_id: str, candidate: FigureCandidate
+    client: AzureOpenAI,
+    doc_id: str,
+    run_id: str,
+    candidate: FigureCandidate,
+    model: str,
 ) -> dict | None:
     """Run one schema-enforced vision call. Returns None if it cannot be trusted."""
     if not candidate.tight_crop_uri:
@@ -144,7 +152,7 @@ def _understand_one(
             time.sleep(delay)
         try:
             response = client.chat.completions.create(
-                model=FIGURE_MODEL,
+                model=model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": _build_user_content(candidate, image_b64)},
@@ -174,6 +182,68 @@ def _understand_one(
     return None
 
 
+def _derive_budget(
+    page_count: int,
+    allowance: int = FIGURE_PER_PAGE_ALLOWANCE,
+    ceiling: int = FIGURE_MAX_PER_DOC_CEILING,
+) -> int:
+    if page_count < 1:
+        raise ValueError("page_count must be at least 1")
+    if allowance < 1:
+        raise ValueError("figure per-page allowance must be at least 1")
+    if ceiling < 1:
+        raise ValueError("figure per-document ceiling must be at least 1")
+    return min(page_count * allowance, ceiling)
+
+
+def _select_qualified_figures(
+    qualified: list[FigureCandidate], budget: int
+) -> list[FigureCandidate]:
+    if len(qualified) <= budget:
+        return qualified
+
+    by_page: dict[int, list[tuple[int, FigureCandidate]]] = {}
+    for original_index, candidate in enumerate(qualified):
+        by_page.setdefault(candidate.page, []).append((original_index, candidate))
+
+    for page_figures in by_page.values():
+        page_figures.sort(
+            key=lambda item: (
+                -(item[1].features.area_ratio if item[1].features else 0.0),
+                item[0],
+            )
+        )
+
+    selected_indices: list[int] = []
+    page_numbers = sorted(by_page)
+    round_index = 0
+    while len(selected_indices) < budget:
+        added = False
+        for page in page_numbers:
+            page_figures = by_page[page]
+            if round_index < len(page_figures):
+                selected_indices.append(page_figures[round_index][0])
+                added = True
+                if len(selected_indices) == budget:
+                    break
+        if not added:
+            break
+        round_index += 1
+
+    return [qualified[index] for index in sorted(selected_indices)]
+
+
+def _select_model(
+    analyzed_count: int,
+    premium_model: str = FIGURE_MODEL_PREMIUM,
+    economy_model: str = FIGURE_MODEL_ECONOMY,
+    premium_max_figures: int = FIGURE_PREMIUM_MAX_FIGURES,
+) -> str:
+    if premium_max_figures < 0:
+        raise ValueError("premium figure threshold cannot be negative")
+    return premium_model if analyzed_count <= premium_max_figures else economy_model
+
+
 def _routing_outcome(understanding: dict | None) -> str:
     """Map the model output onto the retain/reject decision.
 
@@ -196,24 +266,48 @@ def step4c_understanding_main(ctx: dict) -> dict:
     with timed_step("step4c_understanding", doc_id, run_id):
         raw = download_json_artifact(doc_id, run_id, "figures.json")
         candidates = [FigureCandidate.model_validate(c) for c in raw]
-        qualified = [
+        all_qualified = [
             c for c in candidates if c.status == "candidate" and c.tight_crop_uri
-        ][:MAX_FIGURES]
+        ]
+        step4a_result = download_json_artifact(doc_id, run_id, "step4a-result.json")
+        budget = _derive_budget(step4a_result["page_count"])
+        qualified = _select_qualified_figures(all_qualified, budget)
+        qualified_count = len(all_qualified)
+        analyzed_count = len(qualified)
+        budget_bound = qualified_count > analyzed_count
+        model = _select_model(analyzed_count)
 
         if not qualified:
             upload_json_artifact(doc_id, run_id, "figure-understanding.json", [])
-            upload_json_artifact(doc_id, run_id, "step4c-result.json", {
-                "understood": 0, "retained": 0, "rejected": 0,
-            })
+            result = Step4CResult(
+                understood=0,
+                retained=0,
+                rejected=0,
+                model=model,
+                duration_ms=0,
+                qualified_count=qualified_count,
+                budget=budget,
+                analyzed_count=0,
+                budget_bound=False,
+            )
+            upload_json_artifact(
+                doc_id, run_id, "step4c-result.json", result.model_dump()
+            )
             logger.info("[step4c] doc_id=%s no qualified figures", doc_id)
             return {"understood": 0, "retained": 0}
+
+        if budget_bound:
+            logger.warning(
+                "[step4c] vision budget bound: qualified=%d analyzed=%d budget=%d",
+                qualified_count, analyzed_count, budget,
+            )
 
         client = _get_client()
         t0 = time.monotonic()
 
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT) as pool:
             understandings = list(pool.map(
-                lambda c: _understand_one(client, doc_id, run_id, c), qualified
+                lambda c: _understand_one(client, doc_id, run_id, c, model), qualified
             ))
 
         records = []
@@ -236,20 +330,27 @@ def step4c_understanding_main(ctx: dict) -> dict:
         retained = sum(v for k, v in outcomes.items() if k != "reject")
 
         upload_json_artifact(doc_id, run_id, "figure-understanding.json", records)
-        upload_json_artifact(doc_id, run_id, "step4c-result.json", {
-            "understood": len(records),
-            "retained": retained,
-            "rejected": outcomes.get("reject", 0),
-            "outcomes": outcomes,
-            "model": FIGURE_MODEL,
-            "duration_ms": round(duration_ms),
-        })
+        result = Step4CResult(
+            understood=len(records),
+            retained=retained,
+            rejected=outcomes.get("reject", 0),
+            outcomes=outcomes,
+            model=model,
+            duration_ms=round(duration_ms),
+            qualified_count=qualified_count,
+            budget=budget,
+            analyzed_count=analyzed_count,
+            budget_bound=budget_bound,
+        )
+        upload_json_artifact(
+            doc_id, run_id, "step4c-result.json", result.model_dump()
+        )
 
         track_metric("figures_understood", len(records), doc_id=doc_id)
         track_metric("figures_retained", retained, doc_id=doc_id)
 
         logger.info(
-            "[step4c] doc_id=%s understood=%d retained=%d outcomes=%s %.0fms",
-            doc_id, len(records), retained, outcomes, duration_ms,
+            "[step4c] doc_id=%s understood=%d retained=%d model=%s outcomes=%s %.0fms",
+            doc_id, len(records), retained, model, outcomes, duration_ms,
         )
         return {"understood": len(records), "retained": retained}
