@@ -532,6 +532,10 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
             pct = 100 * n / total
             print(f"  {STAGE_LABELS.get(stage, stage):<20} {n:>3}  ({pct:4.1f}%)")
     print(f"  {'total detected':<20} {total:>3}")
+    recovered_n = counts.get("recovered_retain", 0) + counts.get("recovered_rejected", 0)
+    if recovered_n:
+        print(f"  {DIM}({total - recovered_n} by Document Intelligence's reader, "
+              f"{recovered_n} recovered from PDF placement){RESET}")
     print(f"\n{DIM}Hover any box in a PDF viewer to read the reason.{RESET}")
     _try_open(out)
 
@@ -619,15 +623,20 @@ def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
 
     y += max(6.0, 10.0 * scale)
     recovered_n = counts.get("recovered_retain", 0) + counts.get("recovered_rejected", 0)
-    notes = [
-        f"{total} figures detected by Document Intelligence.",
-        "Red boxes never reached the vision model - that is the cost control.",
-    ]
+    adi_n = total - recovered_n
     if recovered_n:
-        notes.append(
-            f"Teal boxes ({recovered_n}) were missed by Document Intelligence's own "
-            "reader and recovered by cross-checking PDF placement geometry."
-        )
+        notes = [
+            f"{total} figures total - {adi_n} detected by Document Intelligence's own "
+            f"reader, {recovered_n} recovered by cross-checking PDF placement geometry.",
+            "Red boxes never reached the vision model - that is the cost control.",
+            "Teal boxes were missed by Document Intelligence's reader and only found "
+            "by the recovery pass.",
+        ]
+    else:
+        notes = [
+            f"{total} figures detected by Document Intelligence.",
+            "Red boxes never reached the vision model - that is the cost control.",
+        ]
     notes.append("This legend is the last page, so page numbers still match the citations.")
     for note in notes:
         if y >= bottom:
