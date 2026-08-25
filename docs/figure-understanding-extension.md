@@ -541,6 +541,19 @@ AND no explicit reference
 -> reject: repeated_boilerplate
 ```
 
+**The reference bypass is caption-and-proximity-text only, and it is
+caption-only for recovered figures.** A recovered candidate (see
+[ADI can miss whole figures](#adi-can-miss-whole-figures--closed-for-digitally-born-pages-add-missed-figure-detection)
+below) never has an ADI caption, so it would otherwise rely entirely on the
+nearby-text fallback — and on a dense page, some paragraph within an inch of
+almost any object contains a generic term like "note" or "figure",
+neutering `low_value_graphic` for exactly the sub-pixel icon/emoji fragments
+it exists to catch (see
+[Recovered figures could bypass the size floor via proximity text](#recovered-figures-could-bypass-the-size-floor-via-proximity-text--fixed)
+below). Recovered candidates therefore always qualify with
+`has_reference=False` and rely solely on geometry; reader-detected figures
+keep the full caption-or-proximity check.
+
 ### Routing signals, not automatic rejection
 
 ```text
@@ -1439,6 +1452,75 @@ there is still no backstop if ADI's own detector misses a sub-figure baked
 into a scan, short of the reserved, unbuilt page-level VLM. A document can
 mix scanned and digitally-born pages and each page is gated on its own
 classification rather than one document-wide flag.
+
+### Recovered figures could bypass the size floor via proximity text — fixed
+
+`FIGURE_RECOVERY_ENABLED` (previous gap, above) closed the missed-figure
+problem, but on `MicrosoftSurfaceCatalog.pdf` (19-page consumer marketing
+catalog) it introduced a false-positive problem of its own, flagged by
+inspecting page 15 of the annotated demo output (confirmed 2026-08-25):
+dozens of recovered "figures" were tiny inline glyphs — a cloud/document
+icon with a drop-shadow, a smiling-face emoji, a small gear icon — being
+sent to the vision model and producing descriptions like "A small figure
+related to Surface tools, but details are unclear" and "An emoji depicting a
+smiling face."
+
+**Confirmed with PyMuPDF (`fitz`), the library step 1 uses to enumerate PDF
+image placements (`page.get_images(full=True)` / `get_image_rects()` in
+`step1_preanalysis.py`):** page 15 contains dozens of tiny `DCTDecode`
+(JPEG) images, several as small as 5×4px, with many *different xrefs placed
+at the identical rect* (e.g. 7 distinct xrefs at the same
+`Rect(738.84, 168.12, 746.04, 172.44)`) — layered raster tiles from a
+PDF-export pipeline rasterizing a compound icon or color-emoji glyph (base
+shape plus shadow/highlight passes) into multiple stacked images. Rendering
+the actual pixel content at each cluster's rect (`page.get_pixmap(matrix=...,
+clip=rect)`) confirmed these are genuine inline decorative glyphs, not
+corrupted noise — legitimately meaningless as standalone figures for a
+search index.
+
+**Root cause: the reference bypass, not the size threshold itself.**
+`MIN_AREA_RATIO` (`FIGURE_MIN_AREA_RATIO`, default `0.002`) applied
+identically to reader and recovered candidates, so the filter was not
+being skipped — it was being *overridden*. `_qualify()`'s hard-rejection
+rules all require "no explicit reference" (see
+[Hard-rejection rules](#hard-rejection-rules) above), and `_has_reference()`
+treats a caption as decisive but falls back to scanning text within
+`FIGURE_REFERENCE_PROXIMITY_IN` (1.0 inch, default) of the bbox for terms
+like `"figure"`, `"note"`, `"see "`, `"warning"`. Recovered candidates
+always have `caption=None`, so they depended entirely on that fallback — and
+on a dense marketing page, some paragraph containing one of these common
+words is almost always within an inch of any tiny icon fragment, silently
+neutering `low_value_graphic` for exactly this document type. Of 93
+recovered candidates on this document, 31 were incorrectly retained and
+routed to vision before the fix; three-quarters of page 15's 24 recovered
+candidates survived qualification when only one (a Copilot+PC logo,
+genuinely above `MIN_AREA_RATIO` on its own merit) should have.
+
+**Fix:** recovered candidates now always qualify with `has_reference=False`
+(`_recovered_candidate_has_reference()` in `step4a_figures.py`), relying
+solely on geometry — never on proximity text, since nothing a recovery pass
+finds ever carries a real ADI caption to legitimately earn the bypass.
+Reader-detected figures are unaffected: a genuinely captioned or
+ADI-referenced figure still survives the same hard-rejection rules exactly
+as before.
+
+**Verified on redeploy (2026-08-25):** re-running the pipeline on
+`MicrosoftSurfaceCatalog.pdf` dropped `recovered_qualified` from 31 to 3 of
+93 recovered candidates (`step4a-result.json`), and page 15 specifically
+from 15 surviving candidates to 1. Total figures sent to vision fell from 73
+to 45; the one recovered figure retained on page 15 is the Copilot+PC logo,
+above the size floor without needing the bypass.
+
+**Not addressed by this fix, tracked separately:** a related but distinct
+gap on the same document — page 9's ADI-detected figure box captures only
+one of two adjacent marketing photos, because both are flattened into a
+single full-page composited raster with no separate PDF-native placement
+for the second photo. Recovery cannot help here (there is no discrete
+placement to recover — the "missing" photo is pixels inside the same
+XObject ADI already partially boxed); a different heuristic (e.g. treating
+an ADI figure box much smaller than its enclosing PDF-native placement as a
+signal that part of that placement is unclaimed) would be needed. Scoped as
+a future OpenSpec change rather than folded into this fix.
 
 ### Figures are described without page context
 
