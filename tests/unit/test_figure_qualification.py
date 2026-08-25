@@ -11,10 +11,12 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from activities.step4a_figures import (
+    FURNITURE_AREA_CEILING,
     HEADER_FOOTER_OVERLAP_THRESHOLD,
     MAX_AREA_RATIO,
     MAX_ASPECT_RATIO,
     MIN_AREA_RATIO,
+    REPEAT_PAGE_THRESHOLD,
     _has_reference,
     _overlap_ratio,
     _polygon_bbox,
@@ -28,6 +30,7 @@ def _features(
     aspect_ratio: float = 1.5,
     header_overlap_ratio: float = 0.0,
     footer_overlap_ratio: float = 0.0,
+    repeat_page_count: int = 1,
 ) -> FigureFeatures:
     return FigureFeatures(
         width_ratio=0.5,
@@ -36,6 +39,7 @@ def _features(
         aspect_ratio=aspect_ratio,
         header_overlap_ratio=header_overlap_ratio,
         footer_overlap_ratio=footer_overlap_ratio,
+        repeat_page_count=repeat_page_count,
     )
 
 
@@ -131,7 +135,10 @@ class TestQualifyRejections:
 
     def test_decorative_geometry_when_too_elongated(self):
         status, reason, _ = _qualify(
-            _features(aspect_ratio=MAX_ASPECT_RATIO + 1.0),
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING / 2,
+                aspect_ratio=MAX_ASPECT_RATIO + 1.0,
+            ),
             caption=None,
             has_reference=False,
         )
@@ -146,6 +153,66 @@ class TestQualifyRejections:
         )
         assert status == "rejected"
         assert reason == "structural_noise"
+
+    def test_repeated_small_figure_is_furniture(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING / 2,
+                repeat_page_count=REPEAT_PAGE_THRESHOLD + 1,
+            ),
+            caption=None,
+            has_reference=False,
+        )
+        assert status == "rejected"
+        assert reason == "repeated_furniture"
+
+    def test_repeat_threshold_is_retained(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING / 2,
+                repeat_page_count=REPEAT_PAGE_THRESHOLD,
+            ),
+            caption=None,
+            has_reference=False,
+        )
+        assert status == "candidate"
+        assert reason is None
+
+    def test_small_non_repeating_figure_is_retained(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=MIN_AREA_RATIO,
+                repeat_page_count=1,
+            ),
+            caption=None,
+            has_reference=False,
+        )
+        assert status == "candidate"
+        assert reason is None
+
+    def test_elongated_figure_within_new_limit_is_retained(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING / 2,
+                aspect_ratio=MAX_ASPECT_RATIO,
+            ),
+            caption=None,
+            has_reference=False,
+        )
+        assert status == "candidate"
+        assert reason is None
+
+    def test_elongated_figure_with_substantial_area_is_retained(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING,
+                aspect_ratio=MAX_ASPECT_RATIO + 1.0,
+            ),
+            caption=None,
+            has_reference=False,
+        )
+        assert status == "candidate"
+        assert reason is None
 
 
 # ── _qualify — reference overrides geometry ───────────────────────────────
@@ -190,6 +257,30 @@ class TestReferenceOverridesGeometry:
         assert status == "candidate"
         assert reason is None
         assert "caption_missing" not in signals
+
+    def test_reference_saves_repeated_furniture(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING / 2,
+                repeat_page_count=REPEAT_PAGE_THRESHOLD + 1,
+            ),
+            caption=None,
+            has_reference=True,
+        )
+        assert status == "candidate"
+        assert reason is None
+
+    def test_caption_saves_repeated_furniture(self):
+        status, reason, _ = _qualify(
+            _features(
+                area_ratio=FURNITURE_AREA_CEILING / 2,
+                repeat_page_count=REPEAT_PAGE_THRESHOLD + 1,
+            ),
+            caption="Figure 1. Product logo",
+            has_reference=True,
+        )
+        assert status == "candidate"
+        assert reason is None
 
     def test_caption_alone_does_not_save_tiny_figure(self):
         # Only has_reference vetoes the area rule; a caption normally implies

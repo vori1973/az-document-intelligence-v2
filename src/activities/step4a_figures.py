@@ -42,9 +42,13 @@ logger = logging.getLogger(__name__)
 HEADER_FOOTER_OVERLAP_THRESHOLD = float(
     os.environ.get("FIGURE_HEADER_FOOTER_OVERLAP_THRESHOLD", "0.30")
 )
-MIN_AREA_RATIO = float(os.environ.get("FIGURE_MIN_AREA_RATIO", "0.01"))
+MIN_AREA_RATIO = float(os.environ.get("FIGURE_MIN_AREA_RATIO", "0.002"))
 MAX_AREA_RATIO = float(os.environ.get("FIGURE_MAX_AREA_RATIO", "0.90"))
-MAX_ASPECT_RATIO = float(os.environ.get("FIGURE_MAX_ASPECT_RATIO", "8.0"))
+MAX_ASPECT_RATIO = float(os.environ.get("FIGURE_MAX_ASPECT_RATIO", "12.0"))
+REPEAT_PAGE_THRESHOLD = int(os.environ.get("FIGURE_REPEAT_PAGE_THRESHOLD", "4"))
+FURNITURE_AREA_CEILING = float(
+    os.environ.get("FIGURE_FURNITURE_AREA_CEILING", "0.01")
+)
 
 CROP_DPI = int(os.environ.get("FIGURE_CROP_DPI", "200"))
 CROP_PADDING_IN = float(os.environ.get("FIGURE_CROP_PADDING_IN", "0.06"))
@@ -168,10 +172,21 @@ def _qualify(
     if furniture_overlap >= HEADER_FOOTER_OVERLAP_THRESHOLD and not has_reference:
         return "rejected", "structural_noise", signals
 
+    if (
+        features.repeat_page_count > REPEAT_PAGE_THRESHOLD
+        and features.area_ratio < FURNITURE_AREA_CEILING
+        and not has_reference
+    ):
+        return "rejected", "repeated_furniture", signals
+
     if features.area_ratio < MIN_AREA_RATIO and not has_reference:
         return "rejected", "low_value_graphic", signals
 
-    if features.aspect_ratio > MAX_ASPECT_RATIO and not caption and not has_reference:
+    if (
+        features.aspect_ratio > MAX_ASPECT_RATIO
+        and features.area_ratio < FURNITURE_AREA_CEILING
+        and not has_reference
+    ):
         return "rejected", "decorative_geometry", signals
 
     # Surviving-but-uncertain cases become routing signals, not rejections.
@@ -250,6 +265,15 @@ def step4a_figures_main(ctx: dict) -> dict:
         pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         candidates: list[FigureCandidate] = []
+        pending_qualification: list[
+            tuple[
+                FigureCandidate,
+                FigureFeatures,
+                tuple[float, float, float, float],
+                bool,
+            ]
+        ] = []
+        pages_by_position_group: dict[str, set[int]] = {}
         rejected_by_reason: dict[str, int] = {}
 
         try:
@@ -284,7 +308,6 @@ def step4a_figures_main(ctx: dict) -> dict:
                     )
 
                     has_ref = _has_reference(fig.caption, page_text, bbox)
-                    status, reason, signals = _qualify(features, fig.caption, has_ref)
 
                     candidate = FigureCandidate(
                         document_id=doc_id,
@@ -296,28 +319,42 @@ def step4a_figures_main(ctx: dict) -> dict:
                         caption=fig.caption,
                         page_width=page_w,
                         page_height=page_h,
-                        status=status,
-                        rejection_reason=reason,
-                        routing_signals=signals,
                         features=features,
                     )
-
-                    if status == "rejected":
-                        rejected_by_reason[reason] = rejected_by_reason.get(reason, 0) + 1
-                    else:
-                        png = _crop_figure(pdf, pnum, bbox)
-                        if png:
-                            filename = f"figures/p{pnum}-fig{fig.figure_index}.png"
-                            upload_artifact(doc_id, run_id, filename, png)
-                            candidate.tight_crop_uri = filename
-                        else:
-                            candidate.status = "rejected"
-                            candidate.rejection_reason = "crop_failed"
-                            rejected_by_reason["crop_failed"] = (
-                                rejected_by_reason.get("crop_failed", 0) + 1
-                            )
-
                     candidates.append(candidate)
+                    pending_qualification.append((candidate, features, bbox, has_ref))
+                    pages_by_position_group.setdefault(
+                        features.normalized_position_group, set()
+                    ).add(pnum)
+
+            for candidate, features, bbox, has_ref in pending_qualification:
+                features.repeat_page_count = len(
+                    pages_by_position_group[features.normalized_position_group]
+                )
+                status, reason, signals = _qualify(
+                    features, candidate.caption, has_ref
+                )
+                candidate.status = status
+                candidate.rejection_reason = reason
+                candidate.routing_signals = signals
+
+                if status == "rejected":
+                    rejected_by_reason[reason] = rejected_by_reason.get(reason, 0) + 1
+                else:
+                    png = _crop_figure(pdf, candidate.page, bbox)
+                    if png:
+                        filename = (
+                            f"figures/p{candidate.page}-fig"
+                            f"{candidate.figure_index}.png"
+                        )
+                        upload_artifact(doc_id, run_id, filename, png)
+                        candidate.tight_crop_uri = filename
+                    else:
+                        candidate.status = "rejected"
+                        candidate.rejection_reason = "crop_failed"
+                        rejected_by_reason["crop_failed"] = (
+                            rejected_by_reason.get("crop_failed", 0) + 1
+                        )
         finally:
             pdf.close()
 

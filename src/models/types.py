@@ -132,6 +132,7 @@ class FigureFeatures(BaseModel):
     header_overlap_ratio: float = 0.0
     footer_overlap_ratio: float = 0.0
     normalized_position_group: str = ""
+    repeat_page_count: int = 1
 
 
 class FigureCandidate(BaseModel):

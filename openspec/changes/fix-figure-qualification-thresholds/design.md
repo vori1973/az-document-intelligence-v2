@@ -27,7 +27,7 @@ What does separate them cleanly is size combined with recurrence:
 
 Every furniture group is under 1% of the page; every repeating content group is above 1.3%. The 1% figure is the *old* `MIN_AREA_RATIO`. It was a correct measure of "small enough to be suspicious" and a wrong measure of "small enough to delete on sight" — so it is retained as a furniture-eligibility ceiling rather than dropped.
 
-**Threshold: 5 or more distinct pages, and area below 1%.** Observed content groups top out at 4 pages, observed furniture starts at 14, so 5 sits between them with wide margins on both sides — and the area ceiling, not the count, is the real safety net. Configurable via `FIGURE_REPEAT_PAGE_THRESHOLD` and `FIGURE_FURNITURE_AREA_CEILING`.
+**Threshold: more than 4 distinct pages, and area below 1%.** Observed content groups top out at 4 pages, observed furniture starts at 14, so 5 sits between them with wide margins on both sides — and the area ceiling, not the count, is the real safety net. The maximum tolerated recurrence defaults to 4 and is configurable via `FIGURE_REPEAT_PAGE_THRESHOLD`; the size ceiling is configurable via `FIGURE_FURNITURE_AREA_CEILING`.
 
 Repetition counts *distinct pages*, not figure instances: two copies of the same graphic on one page is a layout, not furniture.
 
