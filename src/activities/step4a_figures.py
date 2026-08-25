@@ -283,6 +283,22 @@ def _has_reference(caption: str | None, page_text, figure_bbox=None) -> bool:
     return False
 
 
+def _recovered_candidate_has_reference() -> bool:
+    """Whether a recovered candidate qualifies for the has_reference escape
+    hatch in `_qualify` (structural_noise, repeated_furniture,
+    low_value_graphic, decorative_geometry).
+
+    Always False. Recovered candidates never carry a real ADI caption, so
+    `_has_reference`'s only route for them would be its proximity-text
+    fallback -- and on dense pages (e.g. marketing catalogs) a generic term
+    like "note" or "figure" is almost always within a paragraph of *any*
+    tiny inline glyph. That defeats MIN_AREA_RATIO for exactly the
+    sub-pixel icon/emoji fragments it exists to reject, so recovered
+    candidates rely solely on geometry.
+    """
+    return False
+
+
 def _nearby_text_context(page_text, figure_bbox) -> str | None:
     """Text near the figure, joined in reading order, for document context.
 
@@ -551,7 +567,7 @@ def step4a_figures_main(ctx: dict) -> dict:
                                 continue
 
                             features = _candidate_features(bbox, page_w, page_h, furniture)
-                            has_ref = _has_reference(None, page_text, bbox)
+                            has_ref = _recovered_candidate_has_reference()
                             nearby_text = _nearby_text_context(page_text, bbox)
                             section_heading = _section_heading_for(
                                 section_headings, pnum, bbox[1]

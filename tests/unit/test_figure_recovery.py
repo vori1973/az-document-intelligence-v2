@@ -229,3 +229,41 @@ class TestLoadRecoveryInputs:
     def test_recovery_disabled_by_default(self):
         # FIGURE_RECOVERY_ENABLED defaults to false unless explicitly set.
         assert step4a.FIGURE_RECOVERY_ENABLED is False
+
+
+# ── _recovered_candidate_has_reference ──────────────────────────────────────
+
+
+class TestRecoveredCandidateHasReference:
+    """Recovered candidates must not receive the has_reference escape hatch
+    via proximity text (fix-recovered-figure-noise): they never carry a real
+    ADI caption, so on dense pages a generic reference term coincidentally
+    near a tiny icon/emoji fragment would otherwise defeat MIN_AREA_RATIO
+    for exactly the sub-pixel placements it exists to reject.
+    """
+
+    def test_always_false(self):
+        assert step4a._recovered_candidate_has_reference() is False
+
+    def test_tiny_recovered_figure_is_rejected_even_with_nearby_reference_term(self):
+        # A dense-page scenario: a "note" paragraph sits right next to a
+        # sub-pixel-scale recovered placement. If recovered candidates used
+        # _has_reference's proximity fallback (as reader-detected figures
+        # do), this would incorrectly survive MIN_AREA_RATIO.
+        features = step4a.FigureFeatures(
+            width_ratio=0.01,
+            height_ratio=0.01,
+            area_ratio=0.0001,  # far below MIN_AREA_RATIO (0.002 default)
+            aspect_ratio=1.0,
+            header_overlap_ratio=0.0,
+            footer_overlap_ratio=0.0,
+            normalized_position_group="0.50:0.50:0.01:0.01",
+        )
+        page_text = [((0.4, 1.4, 3.0, 1.6), "See the note below for details.")]
+        # Reader-detected figures at this bbox *would* be saved by proximity text...
+        assert step4a._has_reference(None, page_text, (0.5, 1.5, 0.6, 1.6)) is True
+        # ...but recovered candidates never get that escape hatch:
+        has_ref = step4a._recovered_candidate_has_reference()
+        status, reason, _ = step4a._qualify(features, caption=None, has_reference=has_ref)
+        assert status == "rejected"
+        assert reason == "low_value_graphic"
