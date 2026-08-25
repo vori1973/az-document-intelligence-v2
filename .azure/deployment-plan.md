@@ -88,6 +88,21 @@ This branch contains **no** Durable Task Scheduler changes — the paused `migra
 
 **Overall: PASS.** No resource deletions. Safe to proceed to deployment.
 
+## Deployment Result
+
+**Deployed:** 2026-08-25. Bicep applied to `docintv2-dev-rg` (0 create, 11 modify, 0 delete — confirmed via structured what-if). Function App code published to `docintv2-dev-func` via `func azure functionapp publish --python`. Event Grid subscriptions (`ingest-pdf`, `delete-pdf`) confirmed present on `docintv2devst-topic`.
+
+**Fix required during deploy:** storage account `docintv2devst` had `publicNetworkAccess: Disabled` (pre-existing, not a Bicep-declared setting), which blocks Kudu zip-deploy since this Flex Consumption Function App has no VNet integration/private endpoint. Codified `publicNetworkAccess: 'Enabled'` explicitly in `infra/modules/storage.bicep` (AAD-only auth and RBAC remain the actual access control) and redeployed before retrying the code push.
+
+**Live RBAC verification:** Function App managed identity (`5265e94b-d704-4795-97cd-3bbd06d724fa`) confirmed with exactly the expected least-privilege roles — Search Index Data Contributor + Search Service Contributor (Search), Storage Blob Data Reader/Contributor + Table/Queue Data Contributor (Storage), Key Vault Secrets User, Cognitive Services User (ADI), Cognitive Services OpenAI User. No missing or extra assignments.
+
+**Endpoints:**
+- Function App: https://docintv2-dev-func.azurewebsites.net (state: Running, confirmed HTTP 200 on root)
+- ADI: https://docintv2-dev-adi-1c4a9.cognitiveservices.azure.com/
+- OpenAI: https://docintv2-dev-oai-e8436.openai.azure.com/
+- Search: https://docintv2-dev-search.search.windows.net
+- Storage: https://docintv2devst.blob.core.windows.net
+
 ## Approval
 
 - [x] User has approved this plan (subscription + region confirmed, MODIFY scope, no DTS involvement).
