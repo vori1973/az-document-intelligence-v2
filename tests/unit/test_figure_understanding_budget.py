@@ -136,4 +136,9 @@ class TestStepResultTelemetry:
             "budget": budget,
             "analyzed_count": analyzed,
             "budget_bound": bound,
+            "meaningful_described_count": 0,
+            "generic_opener_count": 0,
+            "generic_opener_rate": 0.0,
+            "unlabelled_count": 0,
+            "unlabelled_rate": 0.0,
         }

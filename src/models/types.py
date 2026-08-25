@@ -157,6 +157,13 @@ class FigureCandidate(BaseModel):
     routing_signals: list[str] = Field(default_factory=list)
     features: Optional[FigureFeatures] = None
 
+    # Document-derived context (add-document-derived-prompt) — supplied to the
+    # vision model as candidate vocabulary, never as evidence of what is
+    # present. None when it cannot be determined.
+    document_title: Optional[str] = None
+    section_heading: Optional[str] = None
+    nearby_text: Optional[str] = None
+
 
 class Step4CResult(BaseModel):
     understood: int
@@ -169,6 +176,15 @@ class Step4CResult(BaseModel):
     budget: int
     analyzed_count: int
     budget_bound: bool
+
+    # Description-quality signals (add-document-derived-prompt) — computed
+    # from output text alone, so they act as a standing regression check
+    # without external ground truth.
+    meaningful_described_count: int = 0
+    generic_opener_count: int = 0
+    generic_opener_rate: float = 0.0
+    unlabelled_count: int = 0
+    unlabelled_rate: float = 0.0
 
 
 # ── Pipeline aggregate ────────────────────────────────────────────────────

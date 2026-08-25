@@ -115,7 +115,12 @@ def _page_dimensions(adi_raw: dict, page_number: int) -> tuple[float, float]:
 
 
 def _nearby_text(adi_raw: dict, page_number: int) -> str:
-    """Page text kept as (bbox, lowercased content) for proximity checks."""
+    """Page text kept as (bbox, original-case content) for proximity checks.
+
+    Case is preserved here (rather than lowercased as before) because this
+    same text is now also carried onto the candidate as document context for
+    the vision prompt; `_has_reference` lowercases locally when matching.
+    """
     parts = []
     for para in (adi_raw.get("paragraphs") or []):
         for region in (para.get("bounding_regions") or []):
@@ -123,8 +128,27 @@ def _nearby_text(adi_raw: dict, page_number: int) -> str:
                 continue
             bbox = _polygon_bbox(region.get("polygon") or [])
             if bbox:
-                parts.append((bbox, (para.get("content") or "").lower()))
+                parts.append((bbox, (para.get("content") or "")))
     return parts
+
+
+def _nearby_paragraphs(page_text, figure_bbox):
+    """Paragraphs within REFERENCE_PROXIMITY_IN of the figure, in reading order."""
+    if figure_bbox is None:
+        return []
+
+    fx0, fy0, fx1, fy1 = figure_bbox
+    near_x0, near_y0 = fx0 - REFERENCE_PROXIMITY_IN, fy0 - REFERENCE_PROXIMITY_IN
+    near_x1, near_y1 = fx1 + REFERENCE_PROXIMITY_IN, fy1 + REFERENCE_PROXIMITY_IN
+
+    nearby = []
+    for bbox, content in page_text:
+        bx0, by0, bx1, by1 = bbox
+        if bx1 < near_x0 or bx0 > near_x1 or by1 < near_y0 or by0 > near_y1:
+            continue
+        nearby.append((bbox, content))
+    nearby.sort(key=lambda item: (item[0][1], item[0][0]))
+    return nearby
 
 
 def _has_reference(caption: str | None, page_text, figure_bbox=None) -> bool:
@@ -138,19 +162,65 @@ def _has_reference(caption: str | None, page_text, figure_bbox=None) -> bool:
     """
     if caption and caption.strip():
         return True
-    if figure_bbox is None:
-        return False
-
-    fx0, fy0, fx1, fy1 = figure_bbox
-    near_x0, near_y0 = fx0 - REFERENCE_PROXIMITY_IN, fy0 - REFERENCE_PROXIMITY_IN
-    near_x1, near_y1 = fx1 + REFERENCE_PROXIMITY_IN, fy1 + REFERENCE_PROXIMITY_IN
-
-    for (bx0, by0, bx1, by1), content in page_text:
-        if bx1 < near_x0 or bx0 > near_x1 or by1 < near_y0 or by0 > near_y1:
-            continue
-        if any(term in content for term in REFERENCE_TERMS):
+    for _, content in _nearby_paragraphs(page_text, figure_bbox):
+        if any(term in content.lower() for term in REFERENCE_TERMS):
             return True
     return False
+
+
+def _nearby_text_context(page_text, figure_bbox) -> str | None:
+    """Text near the figure, joined in reading order, for document context.
+
+    Returns None (rather than an empty string) when nothing is nearby, so
+    candidates without located context degrade cleanly instead of carrying
+    an empty-but-present field.
+    """
+    parts = [content.strip() for _, content in _nearby_paragraphs(page_text, figure_bbox) if content.strip()]
+    return " ".join(parts) if parts else None
+
+
+def _section_headings(adi_raw: dict) -> list[tuple[int, float, str]]:
+    """(page_number, y0, heading text) for every sectionHeading paragraph.
+
+    Sorted in document reading order so the heading in force at a given
+    figure is the last one at or before its position.
+    """
+    headings = []
+    for para in (adi_raw.get("paragraphs") or []):
+        if (para.get("role") or "") != "sectionHeading":
+            continue
+        content = (para.get("content") or "").strip()
+        if not content:
+            continue
+        for region in (para.get("bounding_regions") or []):
+            bbox = _polygon_bbox(region.get("polygon") or [])
+            pnum = region.get("page_number")
+            if bbox and pnum is not None:
+                headings.append((pnum, bbox[1], content))
+    headings.sort(key=lambda h: (h[0], h[1]))
+    return headings
+
+
+def _section_heading_for(
+    headings: list[tuple[int, float, str]], page_number: int, figure_y0: float
+) -> str | None:
+    """The most recent section heading at or before this figure's position."""
+    current = None
+    for pnum, y0, text in headings:
+        if pnum > page_number or (pnum == page_number and y0 > figure_y0):
+            break
+        current = text
+    return current
+
+
+def _document_title(adi_raw: dict, source_file: str) -> str:
+    """The ADI-detected document title, falling back to the source filename."""
+    for para in (adi_raw.get("paragraphs") or []):
+        if (para.get("role") or "") == "title":
+            content = (para.get("content") or "").strip()
+            if content:
+                return content
+    return os.path.basename(source_file)
 
 
 # ── 4B: deterministic qualification ───────────────────────────────────────
@@ -264,6 +334,9 @@ def step4a_figures_main(ctx: dict) -> dict:
         pdf_bytes = download_document(blob_name)
         pdf = fitz.open(stream=pdf_bytes, filetype="pdf")
 
+        document_title = _document_title(adi_raw, blob_name)
+        section_headings = _section_headings(adi_raw)
+
         candidates: list[FigureCandidate] = []
         pending_qualification: list[
             tuple[
@@ -308,6 +381,8 @@ def step4a_figures_main(ctx: dict) -> dict:
                     )
 
                     has_ref = _has_reference(fig.caption, page_text, bbox)
+                    nearby_text = _nearby_text_context(page_text, bbox)
+                    section_heading = _section_heading_for(section_headings, pnum, y0)
 
                     candidate = FigureCandidate(
                         document_id=doc_id,
@@ -320,6 +395,9 @@ def step4a_figures_main(ctx: dict) -> dict:
                         page_width=page_w,
                         page_height=page_h,
                         features=features,
+                        document_title=document_title,
+                        section_heading=section_heading,
+                        nearby_text=nearby_text,
                     )
                     candidates.append(candidate)
                     pending_qualification.append((candidate, features, bbox, has_ref))

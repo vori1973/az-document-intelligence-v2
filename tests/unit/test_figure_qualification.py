@@ -17,12 +17,16 @@ from activities.step4a_figures import (
     MAX_ASPECT_RATIO,
     MIN_AREA_RATIO,
     REPEAT_PAGE_THRESHOLD,
+    _document_title,
     _has_reference,
+    _nearby_text_context,
     _overlap_ratio,
     _polygon_bbox,
     _qualify,
+    _section_heading_for,
+    _section_headings,
 )
-from models.types import FigureFeatures
+from models.types import FigureCandidate, FigureFeatures
 
 
 def _features(
@@ -332,3 +336,111 @@ class TestQualifyRoutingSignals:
             "small_figure_with_reference",
             "furniture_overlap_with_reference",
         }
+
+
+# ── Document-derived context (add-document-derived-prompt) ────────────────
+
+
+def _adi_raw(paragraphs: list[dict]) -> dict:
+    return {"paragraphs": paragraphs}
+
+
+def _title_paragraph(content: str) -> dict:
+    return {"role": "title", "content": content, "bounding_regions": []}
+
+
+def _heading_paragraph(content: str, page_number: int, y0: float) -> dict:
+    return {
+        "role": "sectionHeading",
+        "content": content,
+        "bounding_regions": [
+            {"page_number": page_number, "polygon": [1.0, y0, 3.0, y0, 3.0, y0 + 0.2, 1.0, y0 + 0.2]}
+        ],
+    }
+
+
+class TestDocumentTitle:
+    def test_uses_adi_title_role(self):
+        adi_raw = _adi_raw([_title_paragraph("Robotic Knee System Guide")])
+        assert _document_title(adi_raw, "some/blob.pdf") == "Robotic Knee System Guide"
+
+    def test_falls_back_to_source_filename(self):
+        adi_raw = _adi_raw([])
+        assert _document_title(adi_raw, "folder/Technique Guide.pdf") == "Technique Guide.pdf"
+
+    def test_blank_title_falls_back_to_filename(self):
+        adi_raw = _adi_raw([_title_paragraph("   ")])
+        assert _document_title(adi_raw, "folder/report.pdf") == "report.pdf"
+
+
+class TestSectionHeadings:
+    def test_heading_in_force_on_same_page(self):
+        headings = _section_headings(_adi_raw([
+            _heading_paragraph("Femoral Preparation", page_number=2, y0=1.0),
+            _heading_paragraph("Tibial Preparation", page_number=2, y0=5.0),
+        ]))
+        assert _section_heading_for(headings, page_number=2, figure_y0=3.0) == "Femoral Preparation"
+        assert _section_heading_for(headings, page_number=2, figure_y0=6.0) == "Tibial Preparation"
+
+    def test_heading_carries_forward_from_earlier_page(self):
+        headings = _section_headings(_adi_raw([
+            _heading_paragraph("Femoral Preparation", page_number=1, y0=1.0),
+        ]))
+        assert _section_heading_for(headings, page_number=3, figure_y0=2.0) == "Femoral Preparation"
+
+    def test_no_heading_before_figure_returns_none(self):
+        headings = _section_headings(_adi_raw([
+            _heading_paragraph("Tibial Preparation", page_number=2, y0=5.0),
+        ]))
+        assert _section_heading_for(headings, page_number=1, figure_y0=1.0) is None
+
+    def test_no_headings_in_document_returns_none(self):
+        headings = _section_headings(_adi_raw([]))
+        assert _section_heading_for(headings, page_number=1, figure_y0=1.0) is None
+
+
+class TestNearbyTextContext:
+    def test_gathers_nearby_paragraphs_in_reading_order(self):
+        page_text = [
+            ((1.0, 2.5, 3.0, 2.7), "second sentence."),
+            ((1.0, 1.0, 3.0, 1.2), "first sentence."),
+        ]
+        assert _nearby_text_context(page_text, (1.0, 1.5, 3.0, 2.0)) == "first sentence. second sentence."
+
+    def test_no_nearby_text_returns_none(self):
+        page_text = [((1.0, 20.0, 3.0, 20.2), "far away text.")]
+        assert _nearby_text_context(page_text, (1.0, 1.0, 3.0, 3.0)) is None
+
+    def test_no_bbox_returns_none(self):
+        assert _nearby_text_context([("anything", "here")], None) is None
+
+
+class TestCandidateCarriesContext:
+    def test_candidate_accepts_full_context(self):
+        candidate = FigureCandidate(
+            document_id="doc1",
+            page=1,
+            figure_index=0,
+            figure_id="fig-0",
+            document_title="Robotic Knee System Guide",
+            section_heading="Femoral Preparation",
+            nearby_text="Insert the femoral tracker array as shown.",
+        )
+        assert candidate.document_title == "Robotic Knee System Guide"
+        assert candidate.section_heading == "Femoral Preparation"
+        assert candidate.nearby_text == "Insert the femoral tracker array as shown."
+
+    def test_missing_context_defaults_to_none_and_qualification_still_runs(self):
+        candidate = FigureCandidate(
+            document_id="doc1", page=1, figure_index=0, figure_id="fig-0",
+        )
+        assert candidate.document_title is None
+        assert candidate.section_heading is None
+        assert candidate.nearby_text is None
+
+        # Missing context must not prevent qualification from proceeding.
+        status, reason, signals = _qualify(
+            _features(), caption="Figure 1. Device overview", has_reference=True
+        )
+        assert status == "candidate"
+        assert reason is None
