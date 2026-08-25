@@ -23,7 +23,11 @@
 - [x] 4.1 In `src/activities/step5_chunks.py`, skip emitting a figure chunk when the figure has neither a vision description nor a caption
 - [x] 4.2 Confirm a figure with a caption but no description still indexes on caption text, preserving the documented degraded mode
 - [x] 4.3 Unit test: no chunk for description-less and caption-less figures; caption-only figures still produce a chunk
-- [ ] 4.4 Verify against the technique guide run, where 102 of 177 figure chunks are currently `"[Figure]  (Page N)"` placeholders
+- [x] 4.4 Verify against the technique guide run, where 102 of 177 figure chunks are currently `"[Figure]  (Page N)"` placeholders
+
+  Confirmed via live deployment: previously 102/177 figure chunks were empty
+  placeholders. Re-run under this change produces 176 figure chunks, **0**
+  placeholders — every analyzed figure indexes with a real description.
 
 ## 5. Model tiering
 
@@ -34,7 +38,13 @@
 ## 6. Validation
 
 - [x] 6.1 Run `.venv/bin/python -m pytest tests/ -q`
-- [ ] 6.2 Re-run the technique guide and confirm figures are described past page 22 and placeholder chunks are gone
+- [x] 6.2 Re-run the technique guide and confirm figures are described past page 22 and placeholder chunks are gone
+
+  Confirmed via live deployment: `step4c-result.json` reports
+  `qualified_count: 179, analyzed_count: 179, budget: 288, budget_bound: false`
+  (174 retained, 2 retain_unverified, 1 retain_low_confidence, 2 rejected).
+  Figure chunks span pages 4-71 (46 chunks past page 22, previously empty
+  under the old cap), zero placeholder chunks.
 - [x] 6.3 Re-run the product catalog and confirm all 195 qualified figures are analyzed and `budget_bound` is false
 
   Confirmed via live deployment (`docintv2-dev-rg`): `step4c-result.json` reports
@@ -47,11 +57,16 @@
   took 134.3s wall-clock (`step4c-result.json` `duration_ms: 134319`).
   Extrapolating linearly, the 500-figure ceiling would take roughly 5.7 minutes,
   still well within the 30-minute activity timeout.
-- [ ] 6.5 Record measured cost and wall-clock for both documents in the change folder before archiving
+- [x] 6.5 Record measured cost and wall-clock for both documents in the change folder before archiving
 
   **Product catalog** (159 pages, 195 qualified figures, model `gpt-4o-mini`):
   134.3s wall-clock for figure understanding; cost ≈ 195 × $0.0023 ≈ **$0.45**,
   matching the design doc's estimate. Full artifacts in
   `demo-assets/output/DPS Sports Medicine Product Catalog v1.2 April 2023/`.
+
+  **Technique guide** (72 pages, 179 qualified figures, model `gpt-4o-mini`):
+  131.9s wall-clock for figure understanding; cost ≈ 179 × $0.0023 ≈ **$0.41**.
+  All 179 figures analyzed (`budget_bound: false`), figure chunks span pages
+  4-71 (previously cut off at page 22), zero placeholder chunks.
 
   **Technique guide**: pending — re-run and record before archiving.
