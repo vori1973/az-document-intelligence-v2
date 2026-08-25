@@ -15,15 +15,11 @@ resource searchService 'Microsoft.Search/searchServices@2023-11-01' = {
   location: location
   sku: { name: sku }
   properties: {
+    disableLocalAuth: true
     replicaCount: 1
     partitionCount: 1
     publicNetworkAccess: 'enabled'
     semanticSearch: 'standard'
-    authOptions: {
-      aadOrApiKey: {
-        aadAuthFailureMode: 'http401WithBearerChallenge'
-      }
-    }
   }
 }
 

@@ -567,6 +567,12 @@ def _build_figure_chunks(
             if record and record.get("routing_outcome") == "reject":
                 continue
 
+            caption = (fig.caption or "").strip()
+            understanding = (record or {}).get("understanding") or {}
+            description = (understanding.get("short_description") or "").strip()
+            if candidate and not caption and not description:
+                continue
+
             text = _figure_text(fig, record)
             chunk_id = hashlib.sha256(
                 f"{doc_id}-fig-{fig.figure_index}-p{fig.page_number}".encode()

@@ -83,10 +83,10 @@ If that prints a qualification summary, you're ready.
 | Doc | Pages | Figures | Described | Coverage |
 |---|---|---|---|---|
 | `doc1` — surgical technique paper | 6 | 12 | 11 | **100%** — use this for Q&A |
-| `doc2` — product catalog | 159 | 330 | 60 of 195 | capped by `FIGURE_MAX_PER_DOC` |
+| `doc2` — product catalog | 159 | 330 | up to all 195 qualified | page-derived budget of 500 |
 
-> Ask figure questions against **doc1**. The catalog is for showing *scale*
-> (330 figures, 135 auto-rejected), not deep-page recall.
+> Ask figure questions against **doc1**. The catalog demonstrates scale and
+> page-balanced deep-document coverage.
 
 ---
 

@@ -238,14 +238,19 @@ Set in `infra/modules/functions.bicep` (**not** via `az functionapp config appse
 |---|---|---|
 | `FIGURE_UNDERSTANDING_ENABLED` | `true` | **Rollback switch.** Set `false` to skip vision entirely; figure chunks fall back to caption-only text and the rest of the pipeline is unaffected. |
 | `FIGURE_UNDERSTANDING_MODEL` | `gpt-4o-mini` | Vision-capable deployment on the AOAI resource. |
+| `FIGURE_MODEL_PREMIUM` | `FIGURE_UNDERSTANDING_MODEL` | Vision model used when the analyzed figure count is at or below the premium threshold. |
+| `FIGURE_MODEL_ECONOMY` | `FIGURE_UNDERSTANDING_MODEL` | Vision model used when the analyzed figure count exceeds the premium threshold. |
+| `FIGURE_PREMIUM_MAX_FIGURES` | `60` | Largest analyzed figure count assigned to the premium model. |
 | `FIGURE_CROP_DPI` | `200` | Crop render resolution. Higher = better reading of in-image labels, larger blobs. |
 | `FIGURE_MAX_CONCURRENT` | `4` | Parallel vision calls. Raise only if AOAI quota allows. |
-| `FIGURE_MAX_PER_DOC` | `60` | Per-document vision cap for cost control. Figures beyond the cap are still cropped and indexed, but without a vision description. |
+| `FIGURE_PER_PAGE_ALLOWANCE` | `4` | Multiplier used to derive the document vision budget from its page count. |
+| `FIGURE_MAX_PER_DOC_CEILING` | `500` | Absolute cost ceiling applied after deriving the page-based vision budget. |
 | `FIGURE_REFERENCE_PROXIMITY_IN` | `1.0` | How close (inches) page text must be to a figure to count as a textual reference during qualification. |
 
-Cost note: a 159-page catalog yielded 330 figures → 195 qualified → 60 described
-(hitting the cap) in ~47s. Raise `FIGURE_MAX_PER_DOC` for figure-dense catalogs
-where complete visual coverage matters more than per-document cost.
+The effective budget is `min(page_count * FIGURE_PER_PAGE_ALLOWANCE,
+FIGURE_MAX_PER_DOC_CEILING)`. When it binds, selection is balanced across pages
+and `step4c-result.json` reports the qualified, budgeted, and analyzed counts.
+Figures with neither a vision description nor a caption are not indexed.
 
 ---
 

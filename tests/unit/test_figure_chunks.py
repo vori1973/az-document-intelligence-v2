@@ -174,6 +174,39 @@ class TestBuildFigureChunksDropRules:
             chunks = _build_figure_chunks([_page(_figure())], DOC_ID, BLOB, RUN_ID, records)
             assert len(chunks) == 1, outcome
 
+    def test_candidate_without_description_or_caption_is_not_indexed(self):
+        candidates = {(7, 0): {"status": "candidate"}}
+        chunks = _build_figure_chunks(
+            [_page(_figure(caption=None))], DOC_ID, BLOB, RUN_ID, None, candidates
+        )
+        assert chunks == []
+
+    def test_caption_only_candidate_is_indexed(self):
+        candidates = {(7, 0): {"status": "candidate"}}
+        chunks = _build_figure_chunks(
+            [_page(_figure(caption="Figure 3. Handpiece"))],
+            DOC_ID,
+            BLOB,
+            RUN_ID,
+            None,
+            candidates,
+        )
+        assert len(chunks) == 1
+        assert "Figure 3. Handpiece" in chunks[0].text_for_embedding
+
+    def test_description_without_caption_is_indexed(self):
+        candidates = {(7, 0): {"status": "candidate"}}
+        records = {(7, 0): _understanding_record(understanding=FULL_UNDERSTANDING)}
+        chunks = _build_figure_chunks(
+            [_page(_figure(caption=None))],
+            DOC_ID,
+            BLOB,
+            RUN_ID,
+            records,
+            candidates,
+        )
+        assert len(chunks) == 1
+
 
 # ── _build_figure_chunks — citation and image references ──────────────────
 

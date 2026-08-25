@@ -30,6 +30,21 @@ param figureUnderstandingEnabled string = 'true'
 @description('Vision-capable model deployment used to describe figures')
 param figureUnderstandingModel string = 'gpt-4o-mini'
 
+@description('Vision model deployment used for documents at or below the premium figure threshold')
+param figureModelPremium string = figureUnderstandingModel
+
+@description('Vision model deployment used for documents above the premium figure threshold')
+param figureModelEconomy string = figureUnderstandingModel
+
+@description('Maximum analyzed figures that use the premium vision model')
+param figurePremiumMaxFigures int = 60
+
+@description('Qualified figures allowed per document page')
+param figurePerPageAllowance int = 4
+
+@description('Absolute maximum figures analyzed per document')
+param figureMaxPerDocCeiling int = 500
+
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
 var functionAppName    = '${baseName}-func'
@@ -91,6 +106,11 @@ module functions './modules/functions.bicep' = {
     ocrEnabled: ocrEnabled
     figureUnderstandingEnabled: figureUnderstandingEnabled
     figureUnderstandingModel: figureUnderstandingModel
+    figureModelPremium: figureModelPremium
+    figureModelEconomy: figureModelEconomy
+    figurePremiumMaxFigures: figurePremiumMaxFigures
+    figurePerPageAllowance: figurePerPageAllowance
+    figureMaxPerDocCeiling: figureMaxPerDocCeiling
   }
 }
 

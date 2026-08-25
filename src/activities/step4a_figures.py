@@ -234,10 +234,14 @@ def step4a_figures_main(ctx: dict) -> dict:
         adi_results = [AdiPageResult.model_validate(r) for r in adi_results_raw]
 
         total_figures = sum(len(r.figures) for r in adi_results)
+        page_count = len(adi_results)
         if total_figures == 0:
             upload_json_artifact(doc_id, run_id, "figures.json", [])
             upload_json_artifact(doc_id, run_id, "step4a-result.json", {
-                "figures_total": 0, "qualified": 0, "rejected": 0,
+                "page_count": page_count,
+                "figures_total": 0,
+                "qualified": 0,
+                "rejected": 0,
             })
             logger.info("[step4a] doc_id=%s no figures", doc_id)
             return {"figures_total": 0, "qualified": 0}
@@ -323,6 +327,7 @@ def step4a_figures_main(ctx: dict) -> dict:
             doc_id, run_id, "figures.json", [c.model_dump() for c in candidates]
         )
         upload_json_artifact(doc_id, run_id, "step4a-result.json", {
+            "page_count": page_count,
             "figures_total": len(candidates),
             "qualified": len(qualified),
             "rejected": len(candidates) - len(qualified),
