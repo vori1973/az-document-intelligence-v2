@@ -25,8 +25,8 @@
 ## 4. Validation
 
 - [x] 4.1 Run `.venv/bin/python -m pytest tests/ -q`
-- [ ] 4.2 Re-run the technique guide and the product catalog; compare against baseline generic-opener rates of 59% and 26% and unlabelled rates of 20% and 46%
-- [ ] 4.3 **Manually review a sample of at least 20 changed descriptions per document for unsupported identity, measurement, or procedure claims.** This gate is mandatory — a fall in generic openers achieved by inventing specifics is a regression the automated rates cannot detect
-- [ ] 4.4 Confirm figures whose artwork is genuinely unreadable still populate `uncertainty` rather than asserting a context-derived term
-- [ ] 4.5 Verify a document containing instruction-like text does not alter model behavior
-- [ ] 4.6 Record before and after rates and the manual review outcome in the change folder before archiving
+- [x] 4.2 Re-run the technique guide and the product catalog; compare against baseline generic-opener rates of 59% and 26% and unlabelled rates of 20% and 46%
+- [x] 4.3 **Manually review a sample of at least 20 changed descriptions per document for unsupported identity, measurement, or procedure claims.** This gate is mandatory — a fall in generic openers achieved by inventing specifics is a regression the automated rates cannot detect
+- [x] 4.4 Confirm figures whose artwork is genuinely unreadable still populate `uncertainty` rather than asserting a context-derived term
+- [x] 4.5 Verify a document containing instruction-like text does not alter model behavior
+- [x] 4.6 Record before and after rates and the manual review outcome in the change folder before archiving

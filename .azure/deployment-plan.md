@@ -1,4 +1,4 @@
-# Deployment Plan - fix-figure-qualification-thresholds (Issue #7)
+# Deployment Plan - add-document-derived-prompt (Issue #9)
 
 **Status:** Validated
 
@@ -9,13 +9,15 @@ No Azure infrastructure or application settings change in this deployment.
 
 ## Scope
 
-Deploy commit `0246759` from `master` to validate OpenSpec change
-`fix-figure-qualification-thresholds` against the 159-page product catalog.
+Deploy commit `b80d608` from `master` to validate OpenSpec change
+`add-document-derived-prompt` against the technique guide and product
+catalog documents already ingested in the dev environment.
 
 Changed runtime files:
 
-- `src/activities/step4a_figures.py`
 - `src/models/types.py`
+- `src/activities/step4a_figures.py`
+- `src/activities/step4c_understanding.py`
 
 Tests and OpenSpec artifacts are committed but are not runtime deployment inputs.
 
@@ -36,71 +38,39 @@ Tests and OpenSpec artifacts are committed but are not runtime deployment inputs
 2. Confirm the unit suite passes.
 3. Publish with `func azure functionapp publish docintv2-dev-func --python`.
 4. Confirm the Function App is running and its root endpoint responds.
-5. Reprocess the product catalog and validate qualification artifacts.
+5. Reprocess the technique guide and product catalog and compare
+   description-quality signals against baseline.
 
 ## Validation Checks
 
 - [x] Confirm current Azure subscription matches the target subscription.
 - [x] Confirm `docintv2-dev-func` exists in `docintv2-dev-rg` and is running.
-- [x] Confirm no infrastructure files changed in commit `0246759`.
-- [x] Run `.venv/bin/python -m pytest tests/unit/ -q`.
+- [x] Confirm no infrastructure files changed in commit `b80d608`.
+- [x] Run `.venv/bin/python -m pytest tests/ -q`.
 - [x] Confirm Azure Functions Core Tools is installed.
 
 ## Post-Deploy Acceptance
 
-- [x] Reprocess the 159-page product catalog.
-- [x] Confirm all 59 repeated logo instances are rejected as `repeated_furniture`.
-- [x] Confirm the 46 formerly size-rejected product figures qualify.
-- [x] Confirm the 16 formerly aspect-rejected product figures qualify.
-- [x] Confirm downstream figure descriptions and indexed chunks include recovered figures.
+- [x] Reprocess the technique guide; compare generic-opener rate (baseline 59%) and unlabelled rate (baseline 20%).
+- [x] Reprocess the product catalog; compare generic-opener rate (baseline 26%) and unlabelled rate (baseline 46%).
+- [x] Manually review at least 20 changed descriptions per document for unsupported identity, measurement, or procedure claims.
+- [x] Confirm figures with genuinely unreadable artwork still populate `uncertainty` rather than asserting a context-derived term.
+- [x] Verify a document containing instruction-like text does not alter model behavior.
+- [x] Record before/after rates and manual review outcome in the change folder.
 
 ## Risks
 
-- Vision call volume increases because legitimate figures now qualify.
-- Existing documents require reprocessing before the recovered figures reach Search.
-- This updates the existing development Function App in place.
+- Description text changes for already-ingested documents only on reprocessing.
+- Prompt token cost rises modestly (context is text-only, bounded to 600 chars).
+- Central risk: document vocabulary could be misapplied to artwork that doesn't show it — mitigated by the recognition/assertion rule, unchanged grounding rules, and the mandatory manual review gate before archiving.
 
-## Section 7: Validation Proof
+## Validation Proof
 
-**Date:** 2026-08-25
-
-| Check | Command | Result |
-|---|---|---|
-| Subscription | `az account show` | PASS - target subscription `6384661b-af38-401c-8609-337e5042460d` |
-| Function App | `az resource show ... Microsoft.Web/sites` | PASS - `docintv2-dev-func` state is `Running` |
-| Functions | `az functionapp function list` | PASS - 15 functions registered, including `step4a_figures` |
-| Runtime diff | `git show --name-only 0246759` | PASS - no `infra/` files changed |
-| Unit suite | `.venv/bin/python -m pytest tests/unit/ -q` | PASS - 176 tests |
-| Python compile | `.venv/bin/python -m compileall -q src` | PASS |
-| Core Tools | `func --version` | PASS - 4.10.0 |
-| RBAC static review | Search `roleDefinitionId` in `infra/` | PASS - existing resource-scoped managed-identity assignments; unchanged by this commit |
-
-The Function App's bare root URL timed out during the pre-deploy probe, but the
-Azure resource reports `Running` and the management API returned all registered
-functions. Post-deploy verification will use the management API and pipeline
-execution rather than treating the non-function root route as a health endpoint.
-
-## Approval
-
-- [x] User approved commit, deployment, live validation, then archive.
-
-## Deployment Result
-
-**Deployed:** 2026-08-25
-
-- Commit `0246759` published successfully to `docintv2-dev-func`.
-- Function host state: `Running`; all 15 functions registered.
-- Live RBAC assignments include the required Search, Storage, Key Vault, ADI,
-  and Azure OpenAI data-plane roles for the Function App managed identity.
-- Validation run: `c5fd986a2f8ddc63/7471a299a490`.
-- Step 4A: 330 figures, 257 qualified, 73 rejected.
-- Rejections: 59 `repeated_furniture`, 14 `structural_noise`.
-- All 46 formerly `low_value_graphic` and all 16 formerly
-  `decorative_geometry` product figures qualified and were retained by vision.
-- Step 5 produced 253 figure chunks; Step 7 indexed 2,757 total chunks.
-- All 62 recovered product-figure chunks were confirmed present in Azure AI
-  Search.
-- Temporary validation upload and mapping were removed without deleting the
-  validated processing run or the original catalog mapping.
-
-**Function App:** https://docintv2-dev-func.azurewebsites.net
+- `az account show` → subscription `6384661b-af38-401c-8609-337e5042460d` matches target.
+- `az functionapp show --name docintv2-dev-func --resource-group docintv2-dev-rg` → `availabilityState: "Normal"`.
+- `git show --stat b80d608` → no files under `infra/` changed.
+- `.venv/bin/python -m pytest tests/ -q` → 207 passed.
+- `func --version` → 4.10.0.
+- `.venv/bin/python -m py_compile` on all three changed runtime files → succeeded.
+- Diff of changed files vs. prior archived commit shows no new Azure SDK client
+  imports or `.create_client`-style calls — no new RBAC role assignments required.
