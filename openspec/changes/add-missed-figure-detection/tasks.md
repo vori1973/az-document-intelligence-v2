@@ -42,13 +42,13 @@
 
 ## 6. Deployment and validation
 
-- [ ] 6.1 Set the new app settings on the Function App and deploy
-- [ ] 6.2 Ingest a 16-page clinical reference with recovery enabled and confirm pages 6 and 8 produce recovered figures with real polygons
-- [ ] 6.3 Confirm previously detected figures on that document are unchanged, not duplicated, and still attributed to reader provenance
-- [ ] 6.4 Verify crops of the recovered figures visually match the photographs on those pages
-- [ ] 6.5 Run a retrieval query that finds a recovered figure by its visual content
-- [ ] 6.6 Reprocess the remaining existing test documents, clearing their `processing/_name-index/` entries first so unchanged bytes are not skipped
-- [ ] 6.7 Record recovery counts across the reprocessed corpus to quantify the detection gap
+- [x] 6.1 Set the new app settings on the Function App and deploy
+- [x] 6.2 Ingest a 16-page clinical reference with recovery enabled and confirm pages 6 and 8 produce recovered figures with real polygons
+- [x] 6.3 Confirm previously detected figures on that document are unchanged, not duplicated, and still attributed to reader provenance
+- [x] 6.4 Verify crops of the recovered figures visually match the photographs on those pages
+- [x] 6.5 Run a retrieval query that finds a recovered figure by its visual content
+- [x] 6.6 Reprocess the remaining existing test documents, clearing their `processing/_name-index/` entries first so unchanged bytes are not skipped
+- [x] 6.7 Record recovery counts across the reprocessed corpus to quantify the detection gap
 
 ## 7. Documentation and spec hygiene
 
