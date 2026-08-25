@@ -361,7 +361,8 @@ STAGE_COLORS = {
     "rejected_geometry": (0.85, 0.10, 0.10),
     "rejected_vision": (0.65, 0.10, 0.55),
     "recovered_retain": (0.00, 0.55, 0.75),
-    "recovered_rejected": (0.35, 0.35, 0.75),
+    "recovered_rejected_geometry": (0.55, 0.30, 0.05),
+    "recovered_rejected_vision": (0.45, 0.10, 0.65),
 }
 STAGE_LABELS = {
     "retain": "INDEXED",
@@ -370,13 +371,15 @@ STAGE_LABELS = {
     "rejected_geometry": "REJECTED",
     "rejected_vision": "REJECTED (vision)",
     "recovered_retain": "INDEXED (recovered)",
-    "recovered_rejected": "REJECTED (recovered)",
+    "recovered_rejected_geometry": "REJECTED (recovered)",
+    "recovered_rejected_vision": "REJECTED (recovered, vision)",
 }
 # Order used for the annotated legend and the terminal summary.
 STAGE_ORDER = (
     "retain", "retain_low_confidence", "retain_unverified",
-    "recovered_retain", "recovered_rejected",
+    "recovered_retain",
     "rejected_geometry", "rejected_vision",
+    "recovered_rejected_geometry", "recovered_rejected_vision",
 )
 UNKNOWN_STAGE_COLOR = (0.35, 0.35, 0.35)
 
@@ -413,11 +416,17 @@ def _verdicts(run_dir: str) -> list[dict]:
                 stage, why = outcome, desc
         # Recovered figures never existed in ADI's own reader output — they
         # were found by cross-checking PDF placement geometry against pages
-        # ADI's reader missed. Give them their own stage so the demo shows
-        # *which* figures the recovery pass actually rescued, rather than
-        # blending them into the ordinary ADI-qualification verdicts.
+        # ADI's reader missed. Give them their own stages, but keep the
+        # geometry-vs-vision split intact (same as the ADI verdicts) so it
+        # stays clear which recovered rejections were cost-controlled before
+        # ever reaching the vision model, versus rejected by it.
         if f.get("provenance") == "recovered":
-            stage = "recovered_retain" if stage.startswith("retain") else "recovered_rejected"
+            if stage.startswith("retain"):
+                stage = "recovered_retain"
+            elif stage == "rejected_vision":
+                stage = "recovered_rejected_vision"
+            else:
+                stage = "recovered_rejected_geometry"
             why = f"recovered from PDF placement — {why}"
         out.append({**f, "stage": stage, "why": why})
     return out
@@ -532,7 +541,11 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
             pct = 100 * n / total
             print(f"  {STAGE_LABELS.get(stage, stage):<20} {n:>3}  ({pct:4.1f}%)")
     print(f"  {'total detected':<20} {total:>3}")
-    recovered_n = counts.get("recovered_retain", 0) + counts.get("recovered_rejected", 0)
+    recovered_n = (
+        counts.get("recovered_retain", 0)
+        + counts.get("recovered_rejected_geometry", 0)
+        + counts.get("recovered_rejected_vision", 0)
+    )
     if recovered_n:
         print(f"  {DIM}({total - recovered_n} by Document Intelligence's reader, "
               f"{recovered_n} recovered from PDF placement){RESET}")
@@ -622,21 +635,36 @@ def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
         y += max(used, f_row) + max(4.0, 7.0 * scale)
 
     y += max(6.0, 10.0 * scale)
-    recovered_n = counts.get("recovered_retain", 0) + counts.get("recovered_rejected", 0)
+    recovered_n = (
+        counts.get("recovered_retain", 0)
+        + counts.get("recovered_rejected_geometry", 0)
+        + counts.get("recovered_rejected_vision", 0)
+    )
     adi_n = total - recovered_n
+    geometry_rejected_n = counts.get("rejected_geometry", 0) + counts.get("recovered_rejected_geometry", 0)
+    vision_rejected_n = counts.get("rejected_vision", 0) + counts.get("recovered_rejected_vision", 0)
     if recovered_n:
         notes = [
             f"{total} figures total - {adi_n} detected by Document Intelligence's own "
             f"reader, {recovered_n} recovered by cross-checking PDF placement geometry.",
-            "Red boxes never reached the vision model - that is the cost control.",
+            f"{geometry_rejected_n} boxes (red / brown) never reached the vision model "
+            "- that is the cost control.",
+            f"{vision_rejected_n} boxes (purple / violet) reached the vision model, "
+            "which judged them not meaningful.",
             "Teal boxes were missed by Document Intelligence's reader and only found "
             "by the recovery pass.",
         ]
     else:
         notes = [
             f"{total} figures detected by Document Intelligence.",
-            "Red boxes never reached the vision model - that is the cost control.",
+            f"{geometry_rejected_n} boxes (red) never reached the vision model - that "
+            "is the cost control.",
         ]
+        if vision_rejected_n:
+            notes.append(
+                f"{vision_rejected_n} boxes (purple) reached the vision model, which "
+                "judged them not meaningful."
+            )
     notes.append("This legend is the last page, so page numbers still match the citations.")
     for note in notes:
         if y >= bottom:
