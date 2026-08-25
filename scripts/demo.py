@@ -360,6 +360,8 @@ STAGE_COLORS = {
     "retain_unverified": (0.20, 0.45, 0.85),
     "rejected_geometry": (0.85, 0.10, 0.10),
     "rejected_vision": (0.65, 0.10, 0.55),
+    "recovered_retain": (0.00, 0.55, 0.75),
+    "recovered_rejected": (0.35, 0.35, 0.75),
 }
 STAGE_LABELS = {
     "retain": "INDEXED",
@@ -367,10 +369,13 @@ STAGE_LABELS = {
     "retain_unverified": "INDEXED (no vision)",
     "rejected_geometry": "REJECTED",
     "rejected_vision": "REJECTED (vision)",
+    "recovered_retain": "INDEXED (recovered)",
+    "recovered_rejected": "REJECTED (recovered)",
 }
 # Order used for the annotated legend and the terminal summary.
 STAGE_ORDER = (
     "retain", "retain_low_confidence", "retain_unverified",
+    "recovered_retain", "recovered_rejected",
     "rejected_geometry", "rejected_vision",
 )
 UNKNOWN_STAGE_COLOR = (0.35, 0.35, 0.35)
@@ -406,6 +411,14 @@ def _verdicts(run_dir: str) -> list[dict]:
                 stage, why = outcome, "indexed from caption — vision call failed"
             else:
                 stage, why = outcome, desc
+        # Recovered figures never existed in ADI's own reader output — they
+        # were found by cross-checking PDF placement geometry against pages
+        # ADI's reader missed. Give them their own stage so the demo shows
+        # *which* figures the recovery pass actually rescued, rather than
+        # blending them into the ordinary ADI-qualification verdicts.
+        if f.get("provenance") == "recovered":
+            stage = "recovered_retain" if stage.startswith("retain") else "recovered_rejected"
+            why = f"recovered from PDF placement — {why}"
         out.append({**f, "stage": stage, "why": why})
     return out
 
@@ -490,7 +503,7 @@ def cmd_annotate(target: str, dest: str | None = None) -> None:
         page.draw_rect(rect, color=color, width=1.6)
 
         tag = f"{label_text} · {f['figure_id']}"
-        if stage.startswith("rejected"):
+        if "rejected" in stage:
             tag += f" · {f['why'][:38]}"
         tw = fitz.get_text_length(tag, fontname="helv", fontsize=7) + 6
         band = fitz.Rect(rect.x0, max(0, rect.y0 - 11), min(rect.x0 + tw, page.rect.width), rect.y0)
@@ -605,11 +618,18 @@ def _annotate_legend(pdf, fitz, counts: dict, name: str) -> None:
         y += max(used, f_row) + max(4.0, 7.0 * scale)
 
     y += max(6.0, 10.0 * scale)
-    for note in (
+    recovered_n = counts.get("recovered_retain", 0) + counts.get("recovered_rejected", 0)
+    notes = [
         f"{total} figures detected by Document Intelligence.",
         "Red boxes never reached the vision model - that is the cost control.",
-        "This legend is the last page, so page numbers still match the citations.",
-    ):
+    ]
+    if recovered_n:
+        notes.append(
+            f"Teal boxes ({recovered_n}) were missed by Document Intelligence's own "
+            "reader and recovered by cross-checking PDF placement geometry."
+        )
+    notes.append("This legend is the last page, so page numbers still match the citations.")
+    for note in notes:
         if y >= bottom:
             break
         y += _block(note, y, f_note, "helv", color=(0.3, 0.3, 0.3)) + f_note * 0.4
