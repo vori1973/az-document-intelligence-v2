@@ -529,6 +529,10 @@ def _build_paragraph_chunks(
 
 # ── Figure chunks ─────────────────────────────────────────────────────────
 
+# Source label for figures recovered by the PDF placement cross-check
+# (add-missed-figure-detection), distinguishing them from ADI-sourced chunks.
+RECOVERED_SOURCE = "pdf-placement-recovery"
+
 
 def _build_figure_chunks(
     adi_page_results: list[AdiPageResult],
@@ -536,53 +540,121 @@ def _build_figure_chunks(
     blob_name: str,
     run_id: str,
     understanding_by_key: dict[tuple[int, int], dict] | None = None,
-    candidates_by_key: dict[tuple[int, int], dict] | None = None,
+    candidates: list[dict] | None = None,
 ) -> list[RagChunk]:
     """Build one chunk per figure that survived qualification.
 
     Step 4A's `figures.json` is authoritative for which figures are worth
-    indexing and where their crops live. Without it — 4A disabled, or an
-    older run — every ADI figure is indexed with caption-only text, which is
-    the pre-existing behavior.
+    indexing and where their crops live, and — since add-missed-figure-
+    detection — is also the only place a recovered figure exists at all: a
+    recovered figure has no entry in ADI's own `figures[]`, so it can only be
+    reached by iterating `figures.json` itself, not by iterating ADI's page
+    results. Without `figures.json` — 4A disabled, or an older run — every
+    ADI figure is indexed with caption-only text, which is the pre-existing
+    fallback behavior.
 
     Vision output is additive: it enriches the embedded text, but page,
-    polygon, and figure index always come from ADI.
+    polygon, and figure index always come from a deterministic detector
+    (ADI, or the placement cross-check for a recovered figure) — never from
+    the model.
     """
     understanding_by_key = understanding_by_key or {}
-    candidates_by_key = candidates_by_key or {}
 
+    if candidates:
+        return _build_figure_chunks_from_candidates(
+            candidates, doc_id, blob_name, understanding_by_key
+        )
+    return _build_figure_chunks_from_adi(
+        adi_page_results, doc_id, blob_name, understanding_by_key
+    )
+
+
+def _build_figure_chunks_from_candidates(
+    candidates: list[dict],
+    doc_id: str,
+    blob_name: str,
+    understanding_by_key: dict[tuple[int, int], dict],
+) -> list[RagChunk]:
+    """Drive chunk construction from step 4A's `figures.json`, so a recovered
+    figure — which has no ADI `figures[]` entry — is still indexed.
+    """
+    chunks: list[RagChunk] = []
+    for candidate in candidates:
+        if candidate.get("status") == "rejected":
+            continue
+
+        page = candidate["page"]
+        figure_index = candidate["figure_index"]
+        key = (page, figure_index)
+        record = understanding_by_key.get(key)
+
+        # A confident "not meaningful" verdict drops the chunk entirely.
+        if record and record.get("routing_outcome") == "reject":
+            continue
+
+        caption = (candidate.get("caption") or "").strip()
+        understanding = (record or {}).get("understanding") or {}
+        description = (understanding.get("short_description") or "").strip()
+        if not caption and not description:
+            continue
+
+        text = _figure_text(caption, page, record)
+        chunk_id = hashlib.sha256(
+            f"{doc_id}-fig-{figure_index}-p{page}".encode()
+        ).hexdigest()[:32]
+
+        image_blob = (
+            (record or {}).get("tight_crop_uri")
+            or candidate.get("tight_crop_uri")
+            or f"p{page}-adi-fig-0.jpeg"
+        )
+
+        provenance = candidate.get("provenance", "reader")
+        source = RECOVERED_SOURCE if provenance == "recovered" else ADI_SOURCE
+
+        chunks.append(RagChunk(
+            chunk_id=chunk_id,
+            type="figure",
+            source=source,
+            source_file=blob_name,
+            text_for_embedding=text,
+            image_blob=image_blob,
+            citation=RagCitation(
+                document_id=doc_id,
+                page=page,
+                bounding_polygon=candidate.get("bounding_polygon") or [],
+                figure_index=figure_index,
+            ),
+        ))
+    return chunks
+
+
+def _build_figure_chunks_from_adi(
+    adi_page_results: list[AdiPageResult],
+    doc_id: str,
+    blob_name: str,
+    understanding_by_key: dict[tuple[int, int], dict],
+) -> list[RagChunk]:
+    """Legacy fallback when `figures.json` is unavailable: every ADI figure
+    is indexed with caption-only text, unfiltered by 4B qualification.
+    """
     chunks: list[RagChunk] = []
     for page_result in adi_page_results:
         for fig in page_result.figures:
             key = (fig.page_number, fig.figure_index)
-            candidate = candidates_by_key.get(key)
             record = understanding_by_key.get(key)
 
-            # Deterministic rejection from 4B keeps page furniture out of the
-            # index, not merely out of the vision budget.
-            if candidate and candidate.get("status") == "rejected":
-                continue
-
-            # A confident "not meaningful" verdict drops the chunk entirely.
             if record and record.get("routing_outcome") == "reject":
                 continue
 
             caption = (fig.caption or "").strip()
-            understanding = (record or {}).get("understanding") or {}
-            description = (understanding.get("short_description") or "").strip()
-            if candidate and not caption and not description:
-                continue
-
-            text = _figure_text(fig, record)
+            text = _figure_text(caption, fig.page_number, record)
             chunk_id = hashlib.sha256(
                 f"{doc_id}-fig-{fig.figure_index}-p{fig.page_number}".encode()
             ).hexdigest()[:32]
 
-            # Prefer the step4A tight crop, then an ADI-fetched image. Only
-            # fall back to a guessed OCR filename when neither exists.
             image_blob = (
                 (record or {}).get("tight_crop_uri")
-                or (candidate or {}).get("tight_crop_uri")
                 or fig.adi_image_blob
                 or f"p{fig.page_number}-adi-fig-0.jpeg"
             )
@@ -604,14 +676,14 @@ def _build_figure_chunks(
     return chunks
 
 
-def _figure_text(fig, record: dict | None) -> str:
+def _figure_text(caption: str, page_number: int, record: dict | None) -> str:
     """Compose the embedded text for a figure chunk.
 
     Without vision output this degrades to the previous caption-only form, so
     the pipeline still works when figure understanding is disabled.
     """
-    caption = (fig.caption or "").strip()
-    base = f"[Figure] {caption} (Page {fig.page_number})".strip()
+    caption = (caption or "").strip()
+    base = f"[Figure] {caption} (Page {page_number})".strip()
 
     understanding = (record or {}).get("understanding")
     if not understanding:
@@ -636,7 +708,7 @@ def _figure_text(fig, record: dict | None) -> str:
     if category and category != "unknown":
         parts.append(f"Category: {category}")
 
-    parts.append(f"(Page {fig.page_number})")
+    parts.append(f"(Page {page_number})")
     return " ".join(parts)
 
 
@@ -672,10 +744,9 @@ def step5_chunks_main(ctx: dict) -> dict:
         # Figure qualification and understanding are both optional: absent
         # artifacts mean 4A/4C were disabled or found nothing, and figure
         # chunks fall back to indexing every ADI figure with its caption.
-        candidates_by_key: dict[tuple[int, int], dict] = {}
+        figure_candidates: list[dict] = []
         try:
-            for cand in download_json_artifact(doc_id, run_id, "figures.json"):
-                candidates_by_key[(cand["page"], cand["figure_index"])] = cand
+            figure_candidates = download_json_artifact(doc_id, run_id, "figures.json")
         except Exception:
             logger.info("[step5] No figure candidates artifact; indexing all ADI figures")
 
@@ -688,7 +759,7 @@ def step5_chunks_main(ctx: dict) -> dict:
 
         figure_chunks = _build_figure_chunks(
             adi_page_results, doc_id, blob_name, run_id,
-            understanding_by_key, candidates_by_key,
+            understanding_by_key, figure_candidates,
         )
 
         all_chunks = table_chunks + para_chunks + figure_chunks

@@ -418,6 +418,7 @@ def step4c_understanding_main(ctx: dict) -> dict:
                 "bounding_polygon": candidate.bounding_polygon,
                 "routing_outcome": outcome,
                 "understanding": understanding,
+                "provenance": candidate.provenance,
             })
 
         duration_ms = (time.monotonic() - t0) * 1000

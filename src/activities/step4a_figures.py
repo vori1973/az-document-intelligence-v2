@@ -33,7 +33,13 @@ from shared.blob_client import (
     upload_json_artifact,
 )
 from shared.telemetry import timed_step, track_metric
-from models.types import AdiPageResult, FigureCandidate, FigureFeatures
+from models.types import (
+    AdiPageResult,
+    FigureCandidate,
+    FigureFeatures,
+    ImagePlacement,
+    PageImageClassification,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,14 @@ FURNITURE_AREA_CEILING = float(
 
 CROP_DPI = int(os.environ.get("FIGURE_CROP_DPI", "200"))
 CROP_PADDING_IN = float(os.environ.get("FIGURE_CROP_PADDING_IN", "0.06"))
+
+# Recovery cross-check (add-missed-figure-detection): recovers figures the
+# document reader missed by enumerating the PDF's own embedded image
+# placements (step 1) and cross-checking them against ADI's polygons.
+FIGURE_RECOVERY_ENABLED = os.environ.get("FIGURE_RECOVERY_ENABLED", "false").lower() == "true"
+FIGURE_RECOVERY_OVERLAP_THRESHOLD = float(
+    os.environ.get("FIGURE_RECOVERY_OVERLAP_THRESHOLD", "0.30")
+)
 
 # Words that mean "this graphic still matters" — safety icons and callouts
 # are frequently tiny but carry the highest-value content. Matched only in
@@ -90,6 +104,107 @@ def _overlap_ratio(
     inter_h = max(0.0, min(ay1, by1) - max(ay0, by0))
     box_area = max((ax1 - ax0) * (ay1 - ay0), 1e-9)
     return (inter_w * inter_h) / box_area
+
+
+def _placement_rect_to_inches(
+    rect: list[float],
+) -> tuple[float, float, float, float] | None:
+    """Convert a PDF placement rectangle from points (PyMuPDF) to inches
+    (ADI's coordinate space).
+    """
+    if not rect or len(rect) != 4:
+        return None
+    x0, y0, x1, y1 = rect
+    return (
+        x0 / POINTS_PER_INCH, y0 / POINTS_PER_INCH,
+        x1 / POINTS_PER_INCH, y1 / POINTS_PER_INCH,
+    )
+
+
+def _bbox_to_polygon(bbox: tuple[float, float, float, float]) -> list[float]:
+    """Axis-aligned bbox -> flat 4-corner polygon in ADI's [x1,y1,x2,y2,...] form."""
+    x0, y0, x1, y1 = bbox
+    return [x0, y0, x1, y0, x1, y1, x0, y1]
+
+
+def _already_detected(
+    bbox: tuple[float, float, float, float],
+    existing_bboxes: list[tuple[float, float, float, float]],
+    threshold: float,
+) -> bool:
+    """Whether `bbox` substantially overlaps any already-detected figure.
+
+    Checked in both directions since ADI polygons and PDF placement
+    rectangles are rarely the same size — a placement fully inside a larger
+    ADI region, or vice versa, both count as "already detected".
+    """
+    for other in existing_bboxes:
+        if max(_overlap_ratio(bbox, other), _overlap_ratio(other, bbox)) >= threshold:
+            return True
+    return False
+
+
+def _first_recovered_index(max_adi_figure_index: int) -> int:
+    """First figure index guaranteed not to collide with any ADI-assigned
+    index. ADI's own indices are never renumbered; recovered figures start
+    strictly above the highest one seen.
+    """
+    return max_adi_figure_index + 1
+
+
+def _candidate_features(
+    bbox: tuple[float, float, float, float],
+    page_w: float,
+    page_h: float,
+    furniture: list[tuple],
+) -> FigureFeatures:
+    """Geometric features shared by reader-detected and recovered figures."""
+    x0, y0, x1, y1 = bbox
+    width = max(x1 - x0, 1e-9)
+    height = max(y1 - y0, 1e-9)
+    return FigureFeatures(
+        width_ratio=width / page_w,
+        height_ratio=height / page_h,
+        area_ratio=(width * height) / (page_w * page_h),
+        aspect_ratio=max(width, height) / min(width, height),
+        header_overlap_ratio=max(
+            (_overlap_ratio(bbox, f) for f in furniture), default=0.0
+        ) if furniture else 0.0,
+        footer_overlap_ratio=0.0,
+        normalized_position_group=(
+            f"{x0 / page_w:.2f}:{y0 / page_h:.2f}:"
+            f"{width / page_w:.2f}:{height / page_h:.2f}"
+        ),
+    )
+
+
+def _load_recovery_inputs(
+    doc_id: str, run_id: str
+) -> tuple[dict[int, PageImageClassification], dict[int, list[ImagePlacement]]] | tuple[None, None]:
+    """Per-page classification and image placements written by step 1.
+
+    Returns (None, None) when recovery inputs are unavailable — an older run,
+    or step 1 predates this capability — so the caller falls back to
+    reader-only behavior rather than failing.
+    """
+    try:
+        step1_raw = download_json_artifact(doc_id, run_id, "step1-result.json")
+        placements_raw = download_json_artifact(doc_id, run_id, "image-placements.json")
+    except Exception:
+        logger.info(
+            "[step4a] doc_id=%s recovery inputs unavailable; reader-only", doc_id
+        )
+        return None, None
+
+    pages_by_number = {
+        p["page_number"]: PageImageClassification.model_validate(p)
+        for p in (step1_raw.get("pages") or [])
+    }
+    placements_by_page: dict[int, list[ImagePlacement]] = {}
+    for raw in placements_raw:
+        placement = ImagePlacement.model_validate(raw)
+        placements_by_page.setdefault(placement.page_number, []).append(placement)
+    return pages_by_number, placements_by_page
 
 
 def _furniture_regions(adi_raw: dict, page_number: int) -> list[tuple]:
@@ -320,13 +435,18 @@ def step4a_figures_main(ctx: dict) -> dict:
 
         total_figures = sum(len(r.figures) for r in adi_results)
         page_count = len(adi_results)
-        if total_figures == 0:
+
+        # A document-level "no figures" short-circuit is only safe when
+        # recovery is disabled — with it enabled, a page with zero
+        # ADI-reported figures is exactly the case recovery exists for.
+        if total_figures == 0 and not FIGURE_RECOVERY_ENABLED:
             upload_json_artifact(doc_id, run_id, "figures.json", [])
             upload_json_artifact(doc_id, run_id, "step4a-result.json", {
                 "page_count": page_count,
                 "figures_total": 0,
                 "qualified": 0,
                 "rejected": 0,
+                "recovered": 0,
             })
             logger.info("[step4a] doc_id=%s no figures", doc_id)
             return {"figures_total": 0, "qualified": 0}
@@ -348,6 +468,8 @@ def step4a_figures_main(ctx: dict) -> dict:
         ] = []
         pages_by_position_group: dict[str, set[int]] = {}
         rejected_by_reason: dict[str, int] = {}
+        adi_bboxes_by_page: dict[int, list[tuple[float, float, float, float]]] = {}
+        max_adi_figure_index = -1
 
         try:
             for page_result in adi_results:
@@ -361,24 +483,11 @@ def step4a_figures_main(ctx: dict) -> dict:
                     if not bbox or page_w <= 0 or page_h <= 0:
                         continue
 
-                    x0, y0, x1, y1 = bbox
-                    width = max(x1 - x0, 1e-9)
-                    height = max(y1 - y0, 1e-9)
+                    adi_bboxes_by_page.setdefault(pnum, []).append(bbox)
+                    max_adi_figure_index = max(max_adi_figure_index, fig.figure_index)
 
-                    features = FigureFeatures(
-                        width_ratio=width / page_w,
-                        height_ratio=height / page_h,
-                        area_ratio=(width * height) / (page_w * page_h),
-                        aspect_ratio=max(width, height) / min(width, height),
-                        header_overlap_ratio=max(
-                            (_overlap_ratio(bbox, f) for f in furniture), default=0.0
-                        ) if furniture else 0.0,
-                        footer_overlap_ratio=0.0,
-                        normalized_position_group=(
-                            f"{x0 / page_w:.2f}:{y0 / page_h:.2f}:"
-                            f"{width / page_w:.2f}:{height / page_h:.2f}"
-                        ),
-                    )
+                    _, y0, _, _ = bbox
+                    features = _candidate_features(bbox, page_w, page_h, furniture)
 
                     has_ref = _has_reference(fig.caption, page_text, bbox)
                     nearby_text = _nearby_text_context(page_text, bbox)
@@ -398,12 +507,84 @@ def step4a_figures_main(ctx: dict) -> dict:
                         document_title=document_title,
                         section_heading=section_heading,
                         nearby_text=nearby_text,
+                        provenance="reader",
                     )
                     candidates.append(candidate)
                     pending_qualification.append((candidate, features, bbox, has_ref))
                     pages_by_position_group.setdefault(
                         features.normalized_position_group, set()
                     ).add(pnum)
+
+            # Recovery cross-check (add-missed-figure-detection): placements
+            # the PDF itself declares that ADI never reported a figure for.
+            # Recovered candidates re-enter the same pending_qualification
+            # list below, so they go through identical 4B rules and cropping.
+            recovered_count = 0
+            if FIGURE_RECOVERY_ENABLED:
+                pages_classification, placements_by_page = _load_recovery_inputs(
+                    doc_id, run_id
+                )
+                if pages_classification and placements_by_page:
+                    next_recovered_index = _first_recovered_index(max_adi_figure_index)
+                    for page_result in adi_results:
+                        pnum = page_result.page_number
+                        page_class = pages_classification.get(pnum)
+                        if not page_class or not page_class.cross_check_eligible:
+                            continue
+                        placements = placements_by_page.get(pnum, [])
+                        if not placements:
+                            continue
+                        page_w, page_h = _page_dimensions(adi_raw, pnum)
+                        if page_w <= 0 or page_h <= 0:
+                            continue
+                        furniture = _furniture_regions(adi_raw, pnum)
+                        page_text = _nearby_text(adi_raw, pnum)
+                        adi_bboxes = adi_bboxes_by_page.get(pnum, [])
+
+                        for placement in placements:
+                            bbox = _placement_rect_to_inches(placement.rect)
+                            if not bbox:
+                                continue
+                            if _already_detected(
+                                bbox, adi_bboxes, FIGURE_RECOVERY_OVERLAP_THRESHOLD
+                            ):
+                                continue
+
+                            features = _candidate_features(bbox, page_w, page_h, furniture)
+                            has_ref = _has_reference(None, page_text, bbox)
+                            nearby_text = _nearby_text_context(page_text, bbox)
+                            section_heading = _section_heading_for(
+                                section_headings, pnum, bbox[1]
+                            )
+
+                            figure_index = next_recovered_index
+                            next_recovered_index += 1
+
+                            candidate = FigureCandidate(
+                                document_id=doc_id,
+                                source_file=blob_name,
+                                page=pnum,
+                                figure_index=figure_index,
+                                figure_id=f"recovered-p{pnum}-{figure_index}",
+                                bounding_polygon=_bbox_to_polygon(bbox),
+                                caption=None,
+                                page_width=page_w,
+                                page_height=page_h,
+                                features=features,
+                                document_title=document_title,
+                                section_heading=section_heading,
+                                nearby_text=nearby_text,
+                                provenance="recovered",
+                            )
+                            candidates.append(candidate)
+                            pending_qualification.append(
+                                (candidate, features, bbox, has_ref)
+                            )
+                            pages_by_position_group.setdefault(
+                                features.normalized_position_group, set()
+                            ).add(pnum)
+                            adi_bboxes.append(bbox)  # avoid re-recovering the same spot twice
+                            recovered_count += 1
 
             for candidate, features, bbox, has_ref in pending_qualification:
                 features.repeat_page_count = len(
@@ -437,6 +618,7 @@ def step4a_figures_main(ctx: dict) -> dict:
             pdf.close()
 
         qualified = [c for c in candidates if c.status == "candidate"]
+        recovered_qualified = sum(1 for c in qualified if c.provenance == "recovered")
 
         upload_json_artifact(
             doc_id, run_id, "figures.json", [c.model_dump() for c in candidates]
@@ -447,13 +629,17 @@ def step4a_figures_main(ctx: dict) -> dict:
             "qualified": len(qualified),
             "rejected": len(candidates) - len(qualified),
             "rejected_by_reason": rejected_by_reason,
+            "recovered": recovered_count,
+            "recovered_qualified": recovered_qualified,
         })
 
         track_metric("figures_total", len(candidates), doc_id=doc_id)
         track_metric("figures_qualified", len(qualified), doc_id=doc_id)
+        track_metric("figures_recovered", recovered_count, doc_id=doc_id)
 
         logger.info(
-            "[step4a] doc_id=%s figures=%d qualified=%d rejected=%s",
-            doc_id, len(candidates), len(qualified), rejected_by_reason or "{}",
+            "[step4a] doc_id=%s figures=%d qualified=%d recovered=%d rejected=%s",
+            doc_id, len(candidates), len(qualified), recovered_count,
+            rejected_by_reason or "{}",
         )
         return {"figures_total": len(candidates), "qualified": len(qualified)}

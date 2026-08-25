@@ -67,6 +67,15 @@ param figurePerPageAllowance int = 4
 @description('Absolute maximum figures analyzed per document')
 param figureMaxPerDocCeiling int = 500
 
+@description('Set to true to enable the PDF-placement cross-check that recovers figures the document reader missed')
+param figureRecoveryEnabled string = 'false'
+
+@description('Overlap fraction above which an embedded image placement is treated as already detected by the document reader')
+param figureRecoveryOverlapThreshold string = '0.30'
+
+@description('Image coverage ratio above which a page is treated as scanned and skipped by the recovery cross-check')
+param figureScannedPageCoverageThreshold string = '0.85'
+
 resource plan 'Microsoft.Web/serverfarms@2023-01-01' = {
   name: planName
   location: location
@@ -139,6 +148,9 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'FIGURE_MAX_CONCURRENT', value: '4' }
         { name: 'FIGURE_PER_PAGE_ALLOWANCE', value: string(figurePerPageAllowance) }
         { name: 'FIGURE_MAX_PER_DOC_CEILING', value: string(figureMaxPerDocCeiling) }
+        { name: 'FIGURE_RECOVERY_ENABLED', value: figureRecoveryEnabled }
+        { name: 'FIGURE_RECOVERY_OVERLAP_THRESHOLD', value: figureRecoveryOverlapThreshold }
+        { name: 'FIGURE_SCANNED_PAGE_COVERAGE_THRESHOLD', value: figureScannedPageCoverageThreshold }
         { name: 'PIPELINE_VERSION', value: 'v2.0' }
       ]
     }

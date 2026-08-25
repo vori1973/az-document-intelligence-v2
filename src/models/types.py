@@ -22,12 +22,41 @@ class PipelineContext(BaseModel):
 # ── Step 1 ────────────────────────────────────────────────────────────────
 
 
+class PageImageClassification(BaseModel):
+    """Per-page classification used to gate figure-recovery cross-checking
+    (add-missed-figure-detection). A scanned page — one full-page raster with
+    no discrete sub-objects — is structurally indistinguishable from a
+    deliberate full-bleed image, so eligibility is decided per page rather
+    than from a single document-level flag.
+    """
+
+    page_number: int
+    has_text: bool
+    image_coverage_ratio: float = 0.0
+    cross_check_eligible: bool = False
+    enumerable: bool = True  # False when placements could not be enumerated
+
+
+class ImagePlacement(BaseModel):
+    """One embedded raster image placement enumerated directly from the PDF
+    object layer, independently of what the document reader detected.
+    """
+
+    page_number: int
+    rect: list[float]  # [x0, y0, x1, y1] in PDF points (PyMuPDF space)
+    width_px: int
+    height_px: int
+
+
 class PreAnalysisResult(BaseModel):
     blob_name: str
     doc_id: str  # SHA-256 hex[:16] of PDF content
     page_count: int
     has_text: bool  # False = scanned/image-only PDF
     file_size_bytes: int
+    # Per-page classification (add-missed-figure-detection). Additive: the
+    # document-level has_text field above is kept for existing consumers.
+    pages: list[PageImageClassification] = Field(default_factory=list)
 
 
 # ── Step 2 ────────────────────────────────────────────────────────────────
@@ -53,6 +82,9 @@ class FigureLocation(BaseModel):
     polygon: list[float]
     caption: Optional[str] = None
     adi_image_blob: Optional[str] = None  # blob path if fetched
+    # Detection provenance (add-missed-figure-detection). Defaults to
+    # "reader" so existing artifacts deserialize unchanged.
+    provenance: Literal["reader", "recovered"] = "reader"
 
 
 class BoundingBox(BaseModel):
@@ -163,6 +195,12 @@ class FigureCandidate(BaseModel):
     document_title: Optional[str] = None
     section_heading: Optional[str] = None
     nearby_text: Optional[str] = None
+
+    # Detection provenance (add-missed-figure-detection). "reader" means
+    # Document Intelligence reported this figure; "recovered" means it came
+    # from the PDF's own embedded image placement cross-check. Defaults to
+    # "reader" so existing artifacts deserialize unchanged.
+    provenance: Literal["reader", "recovered"] = "reader"
 
 
 class Step4CResult(BaseModel):

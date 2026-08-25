@@ -1,6 +1,6 @@
 ## Purpose
 
-Makes the figures in a document retrievable by what they visually show, not only by the caption printed beneath them, while keeping every citation traceable to the exact page and bounding polygon reported by Azure Document Intelligence.
+Makes the figures in a document retrievable by what they visually show, not only by the caption printed beneath them, while keeping every citation traceable to an exact page and bounding polygon produced by a deterministic detector rather than inferred by a model.
 
 ## Requirements
 

@@ -1243,6 +1243,12 @@ FIGURE_MAX_PER_DOC_CEILING=500
 FIGURE_MODEL_PREMIUM=gpt-4o-mini
 FIGURE_MODEL_ECONOMY=gpt-4o-mini
 FIGURE_PREMIUM_MAX_FIGURES=60
+
+# Missed-figure recovery (add-missed-figure-detection) — rollback switch is
+# false: with it off, behavior is identical to before this capability.
+FIGURE_RECOVERY_ENABLED=false
+FIGURE_RECOVERY_OVERLAP_THRESHOLD=0.30       # step4a: placement already-detected threshold
+FIGURE_SCANNED_PAGE_COVERAGE_THRESHOLD=0.85  # step1: per-page cross-check eligibility gate
 ```
 
 ### Reserved for future phases
@@ -1374,9 +1380,9 @@ known gaps, distinct from the deferred capabilities in
 (which degrades both retrieval *and* classification), one about detection
 coverage.
 
-### ADI can miss whole figures — a detection gap, not a reading gap
+### ADI can miss whole figures — closed for digitally-born pages (add-missed-figure-detection)
 
-Step 4A only ever sees what ADI's `figures[]` array reports. On
+Step 4A used to see only what ADI's `figures[]` array reported. On
 `162000-159772.pdf` (16-page patient brochure, confirmed 2026-08-17), ADI
 detected 9 figures total — none on pages 6 or 8. Both pages contain real
 embedded photographs: opening the PDF directly with PyMuPDF shows page 6's
@@ -1384,6 +1390,9 @@ image covers ~64% of the page, page 8's ~44%, both bleeding slightly past the
 page trim on an unusually narrow (4in × 9in) page format. Nothing was
 rejected by qualification (`step4a-result.json`: `rejected: 0`) — there was
 nothing *to* reject, because ADI never reported a candidate for either page.
+Measurement on a 72-page technique guide found the same gap at scale: 45
+embedded image placements across 24 of 72 pages overlapped no ADI figure at
+all.
 
 **OCR does not backstop this.** The second-pass reader (see
 [PIPELINE.md § data sources](PIPELINE.md#data-sources)) only activates on
@@ -1397,40 +1406,39 @@ OCR's output to, and no polygon to cite. OCR improves *reading* a region ADI
 already found; it cannot supply a region ADI never found.
 
 **A page-level VLM (`PAGE_UNDERSTANDING_MODEL`, reserved and unbuilt — see
-[Model and Feature Policy](#model-and-feature-policy)) is a partial fix at
-best.** It could describe the page and recover the content as a
-`page_visual_summary` chunk, but that chunk type cites the *page*, not a
+[Model and Feature Policy](#model-and-feature-policy)) would have been a
+partial fix at best.** It could describe the page and recover the content as
+a `page_visual_summary` chunk, but that chunk type cites the *page*, not a
 polygon — weaker than the exact-box citation every other figure gets.
 
-**PyMuPDF is the actual fix, and it's already designed, just not built:**
-the [Pre-Pass § embedded raster image signals](#embedded-raster-image-signals)
-enumerates the PDF's own image placements independently of ADI — the same
-`page.get_images(full=True)` / `get_image_rects()` calls used to confirm this
-case — and cross-checks them against ADI's `figures[]` polygons via the
-`possible_missed_visual_content` signal. Unlike OCR or a page-level VLM, this
+**PyMuPDF is the fix, and it now ships behind `FIGURE_RECOVERY_ENABLED`
+(default off):** step 1 enumerates the PDF's own embedded image placements
+per page independently of ADI — the same `page.get_images(full=True)` /
+`get_image_rects()` calls used to confirm this case — and step 4A
+cross-checks them against ADI's `figures[]` polygons. A placement that
+overlaps no ADI figure above `FIGURE_RECOVERY_OVERLAP_THRESHOLD` becomes a
+recovered figure candidate, re-entering the same 4B qualification and
+cropping as any ADI-reported figure. Unlike OCR or a page-level VLM, this
 recovers a *real* bounding polygon straight from the PDF's own placement
 rectangle, so a rescued figure keeps full citation quality rather than
-degrading to a page number. It remains unimplemented.
+degrading to a page number. Every figure record now carries a `provenance`
+field (`"reader"` or `"recovered"`) so the gap is measurable per run via
+`step4a-result.json`'s `recovered` count, rather than invisible.
 
-**Scanned pages need a different backstop — gated per page, not per
-document.** A scanned page is one full-page raster with no discrete
+**Scanned pages remain unrecovered — this is a deliberate, gated limitation,
+not an oversight.** A scanned page is one full-page raster with no discrete
 sub-objects for PyMuPDF to enumerate — object-structure-wise it's
-indistinguishable from a deliberate full-bleed background photo, and
-`FIGURE_MAX_AREA_RATIO`-style filtering correctly treats both as noise
-rather than a candidate. ADI still handles scanned pages well (its layout
-model works on rendered pixels, not PDF object structure — that's why it
-doesn't need this fix), but there is currently no backstop if ADI's own
-detector misses a sub-figure baked into a scan, short of the reserved,
-unbuilt page-level VLM. Real-world documents are rarely genuinely mixed
-(scanned + digitally-born pages in one file), since both formats usually
-come from a single production pipeline — but the rare mixed case (e.g.
-scanned exhibits merged into a digital report) is a *per-page* property, so
-the pre-pass should gate per page rather than assume one classification for
-the whole document: skip the cross-check on pages whose images collectively
-cover ~100% of the page area, trust it where a partial-coverage image sits
-alongside live text. `step1-result.json` currently records `has_text` as one
-document-level boolean; extending it to page granularity is the actual
-prerequisite here, not a redesign.
+indistinguishable from a deliberate full-bleed background photo. Step 1 now
+classifies eligibility *per page* rather than per document
+(`PageImageClassification.cross_check_eligible`): a page whose embedded
+images collectively cover more than `FIGURE_SCANNED_PAGE_COVERAGE_THRESHOLD`
+of the page area is skipped, so the recovery cross-check is never run on it.
+ADI still handles scanned pages well (its layout model works on rendered
+pixels, not PDF object structure — that's why it doesn't need this fix), but
+there is still no backstop if ADI's own detector misses a sub-figure baked
+into a scan, short of the reserved, unbuilt page-level VLM. A document can
+mix scanned and digitally-born pages and each page is gated on its own
+classification rather than one document-wide flag.
 
 ### Figures are described without page context
 

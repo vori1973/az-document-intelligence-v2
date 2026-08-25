@@ -246,11 +246,22 @@ Set in `infra/modules/functions.bicep` (**not** via `az functionapp config appse
 | `FIGURE_PER_PAGE_ALLOWANCE` | `4` | Multiplier used to derive the document vision budget from its page count. |
 | `FIGURE_MAX_PER_DOC_CEILING` | `500` | Absolute cost ceiling applied after deriving the page-based vision budget. |
 | `FIGURE_REFERENCE_PROXIMITY_IN` | `1.0` | How close (inches) page text must be to a figure to count as a textual reference during qualification. |
+| `FIGURE_RECOVERY_ENABLED` | `false` | **Rollback switch (add-missed-figure-detection).** Set `true` to recover figures ADI's own detector missed, by cross-checking the PDF's embedded image placements. `false` reproduces pre-recovery behavior exactly — only reader-detected figures are processed. |
+| `FIGURE_RECOVERY_OVERLAP_THRESHOLD` | `0.30` | Overlap fraction (checked in both directions) above which an embedded image placement is treated as already detected by ADI, rather than recovered as a new figure. |
+| `FIGURE_SCANNED_PAGE_COVERAGE_THRESHOLD` | `0.85` | Image coverage ratio above which step 1 marks a page as scanned and ineligible for the recovery cross-check — a full-page raster is structurally indistinguishable from a deliberate full-bleed image, so recovery is skipped there rather than mined for spurious full-page "figures". Gated per page, so a document can mix scanned and digitally-born pages. |
 
 The effective budget is `min(page_count * FIGURE_PER_PAGE_ALLOWANCE,
 FIGURE_MAX_PER_DOC_CEILING)`. When it binds, selection is balanced across pages
 and `step4c-result.json` reports the qualified, budgeted, and analyzed counts.
 Figures with neither a vision description nor a caption are not indexed.
+
+Recovered figures re-enter this same budget and qualification pipeline
+unchanged, and are attributed via a `provenance` field (`"reader"` or
+`"recovered"`) on every figure record; `step4a-result.json` reports how many
+figures were recovered per run. Recovery does not run on pages the recovery
+cross-check considers scanned (see `FIGURE_SCANNED_PAGE_COVERAGE_THRESHOLD`
+above) — a sub-figure baked into a scanned raster remains unrecoverable by
+this mechanism.
 
 ---
 

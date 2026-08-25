@@ -45,6 +45,15 @@ param figurePerPageAllowance int = 4
 @description('Absolute maximum figures analyzed per document')
 param figureMaxPerDocCeiling int = 500
 
+@description('Set to true to enable the PDF-placement cross-check that recovers figures the document reader missed')
+param figureRecoveryEnabled string = 'false'
+
+@description('Overlap fraction above which an embedded image placement is treated as already detected by the document reader')
+param figureRecoveryOverlapThreshold string = '0.30'
+
+@description('Image coverage ratio above which a page is treated as scanned and skipped by the recovery cross-check')
+param figureScannedPageCoverageThreshold string = '0.85'
+
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
 var functionAppName    = '${baseName}-func'
@@ -111,6 +120,9 @@ module functions './modules/functions.bicep' = {
     figurePremiumMaxFigures: figurePremiumMaxFigures
     figurePerPageAllowance: figurePerPageAllowance
     figureMaxPerDocCeiling: figureMaxPerDocCeiling
+    figureRecoveryEnabled: figureRecoveryEnabled
+    figureRecoveryOverlapThreshold: figureRecoveryOverlapThreshold
+    figureScannedPageCoverageThreshold: figureScannedPageCoverageThreshold
   }
 }
 

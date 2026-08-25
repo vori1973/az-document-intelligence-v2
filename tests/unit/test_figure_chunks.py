@@ -11,12 +11,16 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from activities.step5_chunks import _build_figure_chunks, _figure_text
+from activities.step5_chunks import _build_figure_chunks, _figure_text as _figure_text_raw
 from models.types import AdiPageResult, FigureLocation
 
 DOC_ID = "doc-1"
 BLOB = "source.pdf"
 RUN_ID = "run-1"
+
+
+def _figure_text(fig, record):
+    return _figure_text_raw(fig.caption, fig.page_number, record)
 
 
 def _figure(
@@ -157,7 +161,7 @@ class TestBuildFigureChunksDropRules:
         assert chunks[0].type == "figure"
 
     def test_deterministic_rejection_drops_the_chunk(self):
-        candidates = {(7, 0): {"status": "rejected", "rejection_reason": "structural_noise"}}
+        candidates = [{"page": 7, "figure_index": 0, "status": "rejected", "rejection_reason": "structural_noise"}]
         chunks = _build_figure_chunks(
             [_page(_figure())], DOC_ID, BLOB, RUN_ID, None, candidates
         )
@@ -175,14 +179,17 @@ class TestBuildFigureChunksDropRules:
             assert len(chunks) == 1, outcome
 
     def test_candidate_without_description_or_caption_is_not_indexed(self):
-        candidates = {(7, 0): {"status": "candidate"}}
+        candidates = [{"page": 7, "figure_index": 0, "status": "candidate"}]
         chunks = _build_figure_chunks(
             [_page(_figure(caption=None))], DOC_ID, BLOB, RUN_ID, None, candidates
         )
         assert chunks == []
 
     def test_caption_only_candidate_is_indexed(self):
-        candidates = {(7, 0): {"status": "candidate"}}
+        candidates = [{
+            "page": 7, "figure_index": 0, "status": "candidate",
+            "caption": "Figure 3. Handpiece",
+        }]
         chunks = _build_figure_chunks(
             [_page(_figure(caption="Figure 3. Handpiece"))],
             DOC_ID,
@@ -195,7 +202,7 @@ class TestBuildFigureChunksDropRules:
         assert "Figure 3. Handpiece" in chunks[0].text_for_embedding
 
     def test_description_without_caption_is_indexed(self):
-        candidates = {(7, 0): {"status": "candidate"}}
+        candidates = [{"page": 7, "figure_index": 0, "status": "candidate"}]
         records = {(7, 0): _understanding_record(understanding=FULL_UNDERSTANDING)}
         chunks = _build_figure_chunks(
             [_page(_figure(caption=None))],
@@ -230,7 +237,11 @@ class TestBuildFigureChunksReferences:
         assert chunk.image_blob == "figures/p7-fig0.png"
 
     def test_candidate_crop_used_when_record_has_none(self):
-        candidates = {(7, 0): {"status": "candidate", "tight_crop_uri": "figures/p7-fig0.png"}}
+        candidates = [{
+            "page": 7, "figure_index": 0, "status": "candidate",
+            "tight_crop_uri": "figures/p7-fig0.png",
+            "caption": "Figure 3. Handpiece",
+        }]
         chunk = _build_figure_chunks(
             [_page(_figure())], DOC_ID, BLOB, RUN_ID, None, candidates
         )[0]
