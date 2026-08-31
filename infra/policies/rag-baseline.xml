@@ -1,0 +1,39 @@
+<!--
+  Operation policy for POST /rag/baseline (task 5.3).
+
+  The uncached control arm of the demonstration: every eligible request reaches
+  the query Function App, so two identical requests produce two distinct backend
+  invocation identifiers (spec: "Repeated baseline request").
+
+  It deliberately contains no cache-lookup-value / cache-store-value policy. All
+  request shaping, validation, cache-identity derivation, and backend
+  authentication come from the API-scope policy via `<base />`, so the only
+  difference between this operation and /rag/apim-built-in is caching.
+
+  The cache key id is still computed and returned so a presenter can show that
+  both operations resolve the same identity for the same question.
+-->
+<policies>
+  <inbound>
+    <base />
+    <set-variable name="cacheOutcome" value="BYPASS" />
+    <!-- Backend protection is applied on the uncached arm too, so baseline and
+         cached arms are throttled identically (task 5.7). -->
+    <rate-limit-by-key calls="{{rag-backend-rate-limit-calls}}"
+                       renewal-period="{{rag-backend-rate-limit-period-seconds}}"
+                       counter-key='@("rag-backend:" + context.Api.Id)' />
+    <rewrite-uri template="/internal/query" copy-unmatched-params="false" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+    <set-header name="x-demo-cache-store" exists-action="override">
+      <value>not-applicable</value>
+    </set-header>
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

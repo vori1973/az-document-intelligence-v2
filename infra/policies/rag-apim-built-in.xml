@@ -1,0 +1,206 @@
+<!--
+  Operation policy for POST /rag/apim-built-in (tasks 5.5 / 5.6 / 5.7).
+
+  Exact-response caching over the same backend and the same API-scope policy as
+  /rag/baseline. Custom key/value caching is used (rather than the response
+  `cache-lookup` policy) because the operation is POST and the cache identity
+  must include request-body and version dimensions
+  (design.md, "Use custom key/value policies for POST exact caching").
+
+  Cached value shape (an envelope, not a bare body, so a hit can also report the
+  invocation that originally produced the answer):
+
+      { "body": "<verbatim backend JSON>",
+        "backendInvocationId": "...",
+        "generation": "...",
+        "storedAtUtc": "..." }
+
+  Failure behavior (spec: "Cache subsystem failure"): APIM's cache policies do
+  not raise on cache unavailability - a lookup simply yields no value - and every
+  envelope read/write here is additionally wrapped so that any failure degrades
+  to a normal, rate-limited backend call reported as a miss or fallback. A cache
+  problem can never produce a successful empty response.
+-->
+<policies>
+  <inbound>
+    <base />
+
+    <!-- Lookup only for requests the API policy marked eligible: POST, bounded,
+         well-formed JSON with a valid question and a derived cache key. -->
+    <choose>
+      <when condition='@(context.Variables.GetValueOrDefault&lt;bool&gt;("cacheEligible", false))'>
+        <cache-lookup-value key='@((string)context.Variables["cacheKey"])'
+                            variable-name="cachedEnvelope"
+                            caching-type="internal" />
+      </when>
+    </choose>
+
+    <!-- Backend protection immediately after the lookup, as recommended for
+         cache policies: if the cache is unavailable every request becomes a
+         miss, and this keeps that from overloading the query backend.
+         `increment-condition` charges only cache misses against the shared
+         backend counter; using an expression postpones the increment to the end
+         of the pipeline, while the limit itself is still evaluated here. -->
+    <rate-limit-by-key calls="{{rag-backend-rate-limit-calls}}"
+                       renewal-period="{{rag-backend-rate-limit-period-seconds}}"
+                       counter-key='@("rag-backend:" + context.Api.Id)'
+                       increment-condition='@(string.IsNullOrEmpty(context.Variables.GetValueOrDefault&lt;string&gt;("cachedEnvelope", "")))' />
+
+    <set-variable name="cachedBody" value='@{
+      try {
+        var raw = context.Variables.GetValueOrDefault&lt;string&gt;("cachedEnvelope", "");
+        if (string.IsNullOrEmpty(raw)) { return ""; }
+        var envelope = Newtonsoft.Json.Linq.JObject.Parse(raw);
+        return ((string)envelope["body"]) ?? "";
+      } catch (Exception) {
+        return "";
+      }
+    }' />
+
+    <set-variable name="cachedBackendInvocationId" value='@{
+      try {
+        var raw = context.Variables.GetValueOrDefault&lt;string&gt;("cachedEnvelope", "");
+        if (string.IsNullOrEmpty(raw)) { return ""; }
+        var envelope = Newtonsoft.Json.Linq.JObject.Parse(raw);
+        return ((string)envelope["backendInvocationId"]) ?? "";
+      } catch (Exception) {
+        return "";
+      }
+    }' />
+
+    <set-variable name="cachedStoredAtUtc" value='@{
+      try {
+        var raw = context.Variables.GetValueOrDefault&lt;string&gt;("cachedEnvelope", "");
+        if (string.IsNullOrEmpty(raw)) { return ""; }
+        var envelope = Newtonsoft.Json.Linq.JObject.Parse(raw);
+        return ((string)envelope["storedAtUtc"]) ?? "";
+      } catch (Exception) {
+        return "";
+      }
+    }' />
+
+    <choose>
+      <!-- HIT: return the stored answer without invoking the backend, Azure AI
+           Search, or Azure OpenAI. Every proof header is set here as well as in
+           the API-scope outbound section, so the response is complete whether or
+           not the outbound section runs after a short-circuit return. -->
+      <when condition='@(!string.IsNullOrEmpty((string)context.Variables["cachedBody"]))'>
+        <set-variable name="cacheOutcome" value="HIT" />
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-header name="x-demo-cache" exists-action="override">
+            <value>HIT</value>
+          </set-header>
+          <set-header name="x-demo-cache-type" exists-action="override">
+            <value>apim-built-in</value>
+          </set-header>
+          <set-header name="x-demo-cache-eligible" exists-action="override">
+            <value>true</value>
+          </set-header>
+          <set-header name="x-demo-cache-store" exists-action="override">
+            <value>not-applicable</value>
+          </set-header>
+          <set-header name="x-demo-cache-key-id" exists-action="override">
+            <value>@((string)context.Variables["cacheKeyId"])</value>
+          </set-header>
+          <set-header name="x-demo-correlation-id" exists-action="override">
+            <value>@((string)context.Variables["correlationId"])</value>
+          </set-header>
+          <set-header name="x-demo-generation" exists-action="override">
+            <value>{{rag-knowledge-generation}}</value>
+          </set-header>
+          <set-header name="x-demo-security-scope" exists-action="override">
+            <value>{{rag-security-scope}}</value>
+          </set-header>
+          <set-header name="x-demo-prompt-version" exists-action="override">
+            <value>{{rag-prompt-version}}</value>
+          </set-header>
+          <set-header name="x-demo-model-version" exists-action="override">
+            <value>{{rag-logical-model-version}}</value>
+          </set-header>
+          <!-- The producing invocation, clearly labelled as the cached one: the
+               body's own execution metadata describes that earlier request, not
+               this one. -->
+          <set-header name="x-demo-cached-backend-invocation-id" exists-action="override">
+            <value>@((string)context.Variables["cachedBackendInvocationId"])</value>
+          </set-header>
+          <set-header name="x-demo-cached-at" exists-action="override">
+            <value>@((string)context.Variables["cachedStoredAtUtc"])</value>
+          </set-header>
+          <set-header name="x-demo-backend-invocation-id" exists-action="delete" />
+          <set-header name="Server-Timing" exists-action="delete" />
+          <set-body>@((string)context.Variables["cachedBody"])</set-body>
+        </return-response>
+      </when>
+      <!-- MISS (including "the cache was unavailable"): continue to the backend
+           through the normal protected path. A request that never became
+           eligible - for example because cache-key derivation failed - stays a
+           BYPASS rather than being reported as a cache miss. -->
+      <otherwise>
+        <set-variable name="cacheOutcome" value='@(context.Variables.GetValueOrDefault&lt;bool&gt;("cacheEligible", false) ? "MISS" : "BYPASS")' />
+      </otherwise>
+    </choose>
+
+    <rewrite-uri template="/internal/query" copy-unmatched-params="false" />
+  </inbound>
+
+  <backend>
+    <base />
+  </backend>
+
+  <outbound>
+    <base />
+
+    <set-variable name="responseBodyText" value='@{
+      try {
+        return context.Response.Body.As&lt;string&gt;(preserveContent: true) ?? "";
+      } catch (Exception) {
+        return "";
+      }
+    }' />
+
+    <choose>
+      <!-- Store only an eligible, freshly generated, non-empty, bounded, 2xx
+           JSON answer. Validation failures, backend errors, timeouts, and
+           anything served from cache are never (re)stored. -->
+      <when condition='@(context.Variables.GetValueOrDefault&lt;string&gt;("cacheOutcome", "") == "MISS"
+                         &amp;&amp; context.Variables.GetValueOrDefault&lt;bool&gt;("cacheEligible", false)
+                         &amp;&amp; context.Response.StatusCode &gt;= 200
+                         &amp;&amp; context.Response.StatusCode &lt; 300
+                         &amp;&amp; context.Response.Headers.GetValueOrDefault("Content-Type", "").Contains("application/json")
+                         &amp;&amp; ((string)context.Variables["responseBodyText"]).Length &gt; 0
+                         &amp;&amp; ((string)context.Variables["responseBodyText"]).Length &lt;= int.Parse("{{rag-max-cached-response-bytes}}"))'>
+        <cache-store-value key='@((string)context.Variables["cacheKey"])'
+                           value='@{
+                             var envelope = new Newtonsoft.Json.Linq.JObject();
+                             envelope["body"] = (string)context.Variables["responseBodyText"];
+                             envelope["backendInvocationId"] = context.Response.Headers.GetValueOrDefault("X-Demo-Backend-Invocation-Id", "");
+                             envelope["generation"] = "{{rag-knowledge-generation}}";
+                             envelope["storedAtUtc"] = DateTime.UtcNow.ToString("o");
+                             return envelope.ToString(Newtonsoft.Json.Formatting.None);
+                           }'
+                           duration="{{rag-cache-ttl-seconds}}"
+                           caching-type="internal" />
+        <set-header name="x-demo-cache-store" exists-action="override">
+          <value>stored</value>
+        </set-header>
+      </when>
+      <otherwise>
+        <set-header name="x-demo-cache-store" exists-action="override">
+          <value>@(context.Variables.GetValueOrDefault&lt;string&gt;("cacheOutcome", "") == "HIT" ? "not-applicable" : "skipped")</value>
+        </set-header>
+      </otherwise>
+    </choose>
+
+    <set-header name="x-demo-cache-ttl-seconds" exists-action="override">
+      <value>{{rag-cache-ttl-seconds}}</value>
+    </set-header>
+  </outbound>
+
+  <on-error>
+    <base />
+  </on-error>
+</policies>

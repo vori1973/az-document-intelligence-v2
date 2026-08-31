@@ -94,7 +94,7 @@ Azure Monitor owns measurement and presentation.
 | Azure AI Search index | Reuse initially | Contains paragraph, table-row, and figure chunks |
 | Azure OpenAI embedding deployment | Reuse | The current query client already generates query embeddings |
 | Azure OpenAI chat deployment | Reuse for the proof of value | Consider a separate deployment if ingestion and query traffic contend |
-| `scripts/demo.py` retrieval logic | Extract and reuse | `_embed`, `_retrieve`, and `_answer` provide a working reference flow |
+| `scripts/demo.py` retrieval logic | Extracted into `query/rag/` | `rag.retrieval.embed_text`/`hybrid_search` and `rag.answer.generate_answer` are now shared by the demo script and the query Function App |
 | Application Insights and Log Analytics | Reuse after telemetry repair | The resources exist, but telemetry flow is a documented current gap |
 | Existing demo documents | Reuse | Grounded answers and figure citations make cache savings tangible |
 
@@ -166,6 +166,28 @@ The API should use managed identity with least-privilege roles:
 - Cognitive Services OpenAI User on Azure OpenAI.
 
 It should not receive the ingestion Function App's contributor permissions.
+
+#### Current implementation
+
+The reusable query domain and the standalone Function App live under
+`query/` (`query/rag/*.py`, `query/function_app.py`), separate from
+`src/`. `scripts/demo.py` imports `rag.retrieval`/`rag.answer` directly
+instead of keeping a second embedding/retrieval/answer implementation.
+
+The internal route (`POST /api/internal/query`) trusts the following
+request headers from APIM and echoes them back on every response, alongside
+`Server-Timing` for embedding/Search/model durations:
+
+```text
+X-Demo-Generation, X-Demo-Security-Scope, X-Demo-Prompt-Version,
+X-Demo-Model-Version, X-Demo-Cache-Mode, X-Demo-Correlation-Id
+```
+
+A caller-supplied body value for `knowledgeGeneration`/`securityScope` is
+accepted for display only; the trusted headers (or, when absent, this
+app's own non-secret config defaults) are always authoritative — see
+`query/rag/headers.py`. Wiring APIM to set these headers is tracked
+separately under tasks 5.x.
 
 ### 2. Azure API Management
 
@@ -743,3 +765,10 @@ Its approved scope is defined in
 Keep external Redis, application caching, and semantic caching as follow-on
 changes unless the first proposal demonstrates that they can be added without
 making the initial proof difficult to validate or present.
+
+Deployment parameters, the one-time Entra backend registration, identities
+and roles, cache-key dimensions and TTL, guarded generation publication
+(`scripts/publish_generation.sh`), the controlled single-scope limitation,
+and the presenter sequence with expected evidence
+(`scripts/demo_apim_cache.py`) are documented in
+`docs/APIM-EXACT-CACHE-DEMO.md`.

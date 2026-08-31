@@ -202,11 +202,18 @@ cases — remain unwritten. Qualification was instead validated empirically acro
 document, and deleting either removes both. Correct for dedup, surprising for
 versioned files.
 
-### 6. App Insights telemetry not flowing
+### 6. App Insights telemetry repair
 
-Steps emit `step_start` / `step_end` / `step_error`, but traces are not reaching
-App Insights. Diagnose via Durable storage tables meanwhile
-(`DEPLOYMENT.md`). Cause is likely MCAPS policy-managed diagnostic settings.
+The development Function App had `APPLICATIONINSIGHTS_CONNECTION_STRING`, but
+the repository relied only on implicit Functions-host log forwarding and the
+shared workspace contained no telemetry rows. The pipeline and query apps now
+initialize the Azure Monitor OpenTelemetry exporter explicitly, identify their
+services with `OTEL_SERVICE_NAME`, and retain the host connection setting.
+
+After deployment, run the synthetic correlation check in
+`APIM-EXACT-CACHE-DEMO.md`. If it still returns no rows, inspect organization
+policy assignments and effective diagnostic settings; those platform controls
+are outside the application deployment.
 
 ---
 

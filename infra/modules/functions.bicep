@@ -121,6 +121,8 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: storageAccountName }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
+        { name: 'PYTHON_APPLICATIONINSIGHTS_ENABLE_TELEMETRY', value: 'true' }
+        { name: 'OTEL_SERVICE_NAME', value: functionAppName }
         { name: 'TASK_HUB_NAME', value: 'docpipeline' }
         { name: 'STORAGE_ACCOUNT_URL', value: storageAccountUrl }
         { name: 'DOCUMENTS_CONTAINER', value: 'documents' }

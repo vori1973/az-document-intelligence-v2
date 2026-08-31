@@ -57,6 +57,29 @@ if [[ "${OCR_ENABLED_PARAM}" == "false" ]]; then
   echo "  NOTE: ocrEnabled=false — Mistral OCR will be skipped (ADI-only mode)."
 fi
 
+# ── Step 1b: Query API / APIM demo guard ─────────────────────────────────
+# The query backend is protected by App Service Authentication scoped to a
+# pre-created Entra application. Deploying it without that client ID would
+# publish an unauthenticated RAG endpoint, so refuse the combination here
+# rather than discovering it after the fact.
+DEPLOY_QUERY_PARAM=$(grep -E "^param deployQuery" "${PARAMS_FILE}" 2>/dev/null | sed "s/.*= *//" || echo "false")
+QUERY_CLIENT_ID_PARAM=$(grep -E "^param queryBackendClientId" "${PARAMS_FILE}" 2>/dev/null | sed "s/.*= '//;s/'.*//" || echo "")
+
+if [[ "${DEPLOY_QUERY_PARAM}" == "true" ]]; then
+  if [[ -z "${QUERY_CLIENT_ID_PARAM}" || "${QUERY_CLIENT_ID_PARAM}" == *"<"* ]]; then
+    echo ""
+    echo "ERROR: deployQuery = true but queryBackendClientId is not set in ${PARAMS_FILE}"
+    echo ""
+    echo "  Create the backend Entra application once, then record its client ID:"
+    echo "    APP_ID=\$(az ad app create --display-name ${BASE_NAME}-query-api --query appId -o tsv)"
+    echo "    az ad app update --id \"\$APP_ID\" --identifier-uris \"api://\$APP_ID\""
+    echo "    az ad sp create --id \"\$APP_ID\""
+    echo "    # then add to ${PARAMS_FILE}:  param queryBackendClientId = '\$APP_ID'"
+    echo ""
+    exit 1
+  fi
+fi
+
 # ── Step 2: Create resource group ────────────────────────────────────────
 echo ""
 echo "[1/5] Creating resource group '${RESOURCE_GROUP}'..."
@@ -86,6 +109,16 @@ ADI_ENDPOINT=$(echo "${DEPLOYMENT_OUTPUT}"      | jq -r '.properties.outputs.adi
 AOAI_ENDPOINT=$(echo "${DEPLOYMENT_OUTPUT}"     | jq -r '.properties.outputs.aoaiEndpoint.value')
 SEARCH_ENDPOINT=$(echo "${DEPLOYMENT_OUTPUT}"   | jq -r '.properties.outputs.searchEndpoint.value')
 STORAGE_URL=$(echo "${DEPLOYMENT_OUTPUT}"       | jq -r '.properties.outputs.storageAccountUrl.value')
+
+# Query API / APIM demo outputs — empty strings when the switches are off
+QUERY_FUNCTION_APP=$(echo "${DEPLOYMENT_OUTPUT}"   | jq -r '.properties.outputs.queryFunctionAppName.value // empty')
+QUERY_BACKEND_URL=$(echo "${DEPLOYMENT_OUTPUT}"    | jq -r '.properties.outputs.queryBackendUrl.value // empty')
+QUERY_AUTH_ENABLED=$(echo "${DEPLOYMENT_OUTPUT}"   | jq -r '.properties.outputs.queryBackendAuthEnabled.value // false')
+APIM_NAME=$(echo "${DEPLOYMENT_OUTPUT}"            | jq -r '.properties.outputs.apimName.value // empty')
+RAG_BASELINE_URL=$(echo "${DEPLOYMENT_OUTPUT}"     | jq -r '.properties.outputs.ragBaselineUrl.value // empty')
+RAG_BUILT_IN_URL=$(echo "${DEPLOYMENT_OUTPUT}"     | jq -r '.properties.outputs.ragBuiltInCacheUrl.value // empty')
+APIM_SUBSCRIPTION=$(echo "${DEPLOYMENT_OUTPUT}"    | jq -r '.properties.outputs.apimSubscriptionName.value // empty')
+ACTIVE_GENERATION=$(echo "${DEPLOYMENT_OUTPUT}"    | jq -r '.properties.outputs.activeKnowledgeGeneration.value // empty')
 
 echo ""
 echo "  Function App : ${FUNCTION_APP_NAME}"
@@ -157,6 +190,19 @@ func azure functionapp publish "${FUNCTION_APP_NAME}" --python
 cd "${REPO_ROOT}"
 echo "      OK"
 
+# ── Step 6b: Deploy query API code (only when the demo is enabled) ────────
+if [[ -n "${QUERY_FUNCTION_APP}" ]]; then
+  echo ""
+  echo "[4b/5] Deploying query API code to '${QUERY_FUNCTION_APP}'..."
+  cd "${REPO_ROOT}/query"
+  func azure functionapp publish "${QUERY_FUNCTION_APP}" --python
+  cd "${REPO_ROOT}"
+  echo "      OK"
+  if [[ "${QUERY_AUTH_ENABLED}" != "true" ]]; then
+    echo "      WARNING: query backend authentication is DISABLED — the endpoint accepts anonymous requests."
+  fi
+fi
+
 # ── Step 7: Wire Event Grid subscriptions (requires functions to exist) ───
 SYSTEM_TOPIC_NAME=$(echo "${DEPLOYMENT_OUTPUT}" | jq -r '.properties.outputs.systemTopicName.value // empty')
 STORAGE_ACCOUNT_NAME=$(echo "${STORAGE_URL}" | sed 's|https://||;s|\.blob.*||')
@@ -223,6 +269,39 @@ echo "    OpenAI       : ${AOAI_ENDPOINT}"
 echo "    AI Search    : ${SEARCH_ENDPOINT}"
 echo "    Storage      : ${STORAGE_URL}"
 echo ""
+
+if [[ -n "${QUERY_FUNCTION_APP}" ]]; then
+  echo "  RAG query API:"
+  echo "    Query app    : ${QUERY_FUNCTION_APP}"
+  echo "    Backend URL  : ${QUERY_BACKEND_URL}/internal/query"
+  echo "    Auth enabled : ${QUERY_AUTH_ENABLED}"
+  echo "    Generation   : ${ACTIVE_GENERATION}"
+  echo ""
+fi
+
+if [[ -n "${APIM_NAME}" ]]; then
+  echo "  APIM demo operations:"
+  echo "    Baseline     : ${RAG_BASELINE_URL}"
+  echo "    Built-in cache: ${RAG_BUILT_IN_URL}"
+  if [[ -n "${APIM_SUBSCRIPTION}" ]]; then
+    echo ""
+    echo "    Subscription key (not stored anywhere by this deployment):"
+    echo "      az rest --method post --url \\"
+    echo "        \"https://management.azure.com/subscriptions/\$(az account show --query id -o tsv)/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.ApiManagement/service/${APIM_NAME}/subscriptions/${APIM_SUBSCRIPTION}/listSecrets?api-version=2024-05-01\" \\"
+    echo "        --query primaryKey -o tsv"
+  fi
+  echo ""
+  echo "    Publish a new knowledge generation only after ingestion has completed"
+  echo "    and the new corpus is queryable — use the guarded script, which verifies"
+  echo "    both before changing anything (see docs/APIM-EXACT-CACHE-DEMO.md):"
+  echo "      ./scripts/publish_generation.sh --resource-group ${RESOURCE_GROUP} \\"
+  echo "        --apim-name ${APIM_NAME} --storage-account <storage-account> \\"
+  echo "        --doc-id <doc-id> --run-id <run-id> \\"
+  echo "        --probe-question '<question>' --probe-expect '<expected substring>' \\"
+  echo "        --gateway-url ${RAG_BASELINE_URL%/rag/baseline} --new-generation <n>"
+  echo ""
+fi
+
 echo "  Next steps:"
 echo "    - Upload a PDF to the 'documents' container to trigger the pipeline"
 echo "    - Monitor runs (App Insights): az monitor app-insights query --apps ${FUNCTION_APP_NAME/func/ai} --resource-group ${RESOURCE_GROUP} --analytics-query 'traces | where timestamp > ago(30m) | order by timestamp desc | take 50' --output table"

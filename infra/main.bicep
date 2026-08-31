@@ -54,6 +54,102 @@ param figureRecoveryOverlapThreshold string = '0.30'
 @description('Image coverage ratio above which a page is treated as scanned and skipped by the recovery cross-check')
 param figureScannedPageCoverageThreshold string = '0.85'
 
+// ── Query API / APIM exact-cache demo (openspec: add-apim-exact-cache-demo) ──
+// Both switches default to false so existing ingestion deployments are
+// unchanged until the demo is explicitly turned on.
+
+@description('Deploy the separate online RAG query Function App, its plan, storage, identity, and least-privilege role assignments')
+param deployQuery bool = false
+
+@description('Deploy the API Management gateway with the baseline and built-in exact-cache operations. Requires deployQuery')
+param deployApim bool = false
+
+@description('Azure OpenAI chat deployment used for grounded query answers')
+param queryChatDeployment string = 'gpt-4o-mini'
+
+@description('Maximum on-demand instances for the query Function App')
+param queryMaximumInstanceCount int = 40
+
+@description('Per-instance memory in MB for the query Function App')
+@allowed([512, 2048, 4096])
+param queryInstanceMemoryMB int = 2048
+
+@description('Concurrent HTTP executions per query Function App instance')
+param queryHttpPerInstanceConcurrency int = 8
+
+@description('Always-ready query instances. 0 is cheapest; 1 removes cold start from latency demonstrations')
+param queryAlwaysReadyInstanceCount int = 0
+
+@description('Maximum accepted question length in characters, enforced by both APIM and the query backend')
+param queryMaxQuestionLength int = 2000
+
+@description('Default hybrid-retrieval result count')
+param queryDefaultTopK int = 8
+
+@description('Client ID of the pre-created Entra application representing the query backend. Create it out of band, e.g. az ad app create --display-name <name> --identifier-uris api://<id>')
+param queryBackendClientId string = ''
+
+@description('Token audiences accepted by the query backend. Defaults to api://<queryBackendClientId> and the raw client ID')
+param queryBackendAllowedAudiences array = []
+
+@description('Additional approved client (application) IDs allowed to call the query backend directly — deployment or test principals. The APIM gateway identity is added automatically')
+param queryBackendAdditionalAllowedClientIds array = []
+
+@description('APIM SKU. BasicV2 is the lowest-cost tier that supports the built-in cache the demo requires')
+@allowed([
+  'BasicV2'
+  'StandardV2'
+  'PremiumV2'
+  'Developer'
+  'Basic'
+  'Standard'
+  'Premium'
+])
+param apimSku string = 'BasicV2'
+
+@description('APIM scale units')
+param apimSkuCapacity int = 1
+
+@description('Publisher email for the APIM instance')
+param apimPublisherEmail string = ''
+
+@description('Publisher name for the APIM instance')
+param apimPublisherName string = 'RAG cache demo'
+
+@description('Require an APIM subscription key on the demo API')
+param apimSubscriptionRequired bool = true
+
+@description('Active knowledge generation used in every cache identity. Publish a new value only after ingestion completes and the corpus is queryable')
+param knowledgeGeneration string = '0'
+
+@description('Cache-partition security scope. Demonstrates partitioning for one controlled corpus — not tenant authorization')
+param securityScope string = 'demo-public'
+
+@description('Grounded prompt version dimension')
+param promptVersion string = 'v1'
+
+@description('Logical model/answer-contract version dimension')
+param logicalModelVersion string = 'v1'
+
+@description('Built-in cache TTL in seconds')
+param cacheTtlSeconds int = 300
+
+@description('Maximum accepted request body size in bytes at the gateway')
+param apimMaxRequestBytes int = 16384
+
+@description('Maximum response size APIM may store in its built-in cache, in bytes')
+param apimMaxCachedResponseBytes int = 262144
+
+@description('Backend calls allowed per renewal period across the demo operations')
+param apimBackendRateLimitCalls int = 60
+
+@description('Rate-limit renewal period in seconds')
+param apimBackendRateLimitPeriodSeconds int = 60
+
+@description('Backend forward-request timeout in seconds')
+param apimBackendTimeoutSeconds int = 120
+
+
 // ── Resource names ────────────────────────────────────────────────────────
 var storageAccountName = '${take(replace(baseName, '-', ''), 18)}st'
 var functionAppName    = '${baseName}-func'
@@ -64,6 +160,27 @@ var workspaceName      = '${baseName}-logs'
 var appInsightsName    = '${baseName}-ai'
 var adiName            = '${baseName}-adi'
 var openaiName         = '${baseName}-oai'
+
+// Query / APIM demo resource names
+var queryFunctionAppName    = '${baseName}-query-func'
+var queryPlanName           = '${baseName}-query-plan'
+var queryStorageAccountName = '${take(replace(baseName, '-', ''), 15)}qst'
+var gatewayIdentityName     = '${baseName}-gw-id'
+var apimServiceName         = '${baseName}-apim'
+
+// Auth is only wired when a backend Entra application has been supplied; the
+// registration itself is created out of band, never by this template.
+var queryAuthConfigured = !empty(queryBackendClientId)
+// Fail closed for direct ARM/Bicep deployments: an incomplete opt-in deploys
+// no public query surface. scripts/deploy.sh emits a clear error before ARM.
+var queryDeploymentEnabled = deployQuery && queryAuthConfigured
+var apimDeploymentEnabled = queryDeploymentEnabled && deployApim && !empty(apimPublisherEmail) && !empty(apimPublisherName)
+var queryBackendAudience = empty(queryBackendClientId) ? '' : 'api://${queryBackendClientId}'
+var queryAllowedClientIds = union(
+  queryDeploymentEnabled ? [gatewayIdentity!.outputs.clientId] : [],
+  queryBackendAdditionalAllowedClientIds
+)
+
 
 // ── Monitoring (deployed first — other modules need connection string) ────
 module monitoring './modules/monitoring.bicep' = {
@@ -185,6 +302,90 @@ module eventgrid './modules/event_grid.bicep' = {
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+//  Online RAG query + APIM exact-cache demo (openspec: add-apim-exact-cache-demo)
+// ═════════════════════════════════════════════════════════════════════════
+
+// Gateway identity first: the query backend's authentication allow-list needs
+// its client ID, and APIM needs the identity to exist before it can be assigned.
+module gatewayIdentity './modules/gateway_identity.bicep' = if (queryDeploymentEnabled) {
+  name: 'gatewayIdentity'
+  params: {
+    identityName: gatewayIdentityName
+    location: location
+  }
+}
+
+module queryFunctions './modules/query_functions.bicep' = if (queryDeploymentEnabled) {
+  name: 'queryFunctions'
+  params: {
+    queryFunctionAppName: queryFunctionAppName
+    queryPlanName: queryPlanName
+    queryStorageAccountName: queryStorageAccountName
+    location: location
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    searchEndpoint: search.outputs.searchEndpoint
+    searchIndex: searchIndex
+    aoaiEndpoint: openai.outputs.aoaiEndpoint
+    chatDeployment: queryChatDeployment
+    embeddingDeployment: 'text-embedding-ada-002'
+    defaultTopK: queryDefaultTopK
+    maxQuestionLength: queryMaxQuestionLength
+    knowledgeGeneration: knowledgeGeneration
+    securityScope: securityScope
+    promptVersion: promptVersion
+    logicalModelVersion: logicalModelVersion
+    maximumInstanceCount: queryMaximumInstanceCount
+    instanceMemoryMB: queryInstanceMemoryMB
+    httpPerInstanceConcurrency: queryHttpPerInstanceConcurrency
+    alwaysReadyInstanceCount: queryAlwaysReadyInstanceCount
+    authEnabled: true
+    backendClientId: queryBackendClientId
+    allowedAudiences: queryBackendAllowedAudiences
+    allowedClientIds: queryAllowedClientIds
+  }
+}
+
+module queryRbac './modules/query_rbac.bicep' = if (queryDeploymentEnabled) {
+  name: 'queryRbac'
+  params: {
+    searchServiceName: searchServiceName
+    openaiName: openaiName
+    queryFunctionAppPrincipalId: queryFunctions!.outputs.principalId
+  }
+}
+
+module apim './modules/apim.bicep' = if (apimDeploymentEnabled) {
+  name: 'apim'
+  params: {
+    apimName: apimServiceName
+    location: location
+    sku: apimSku
+    skuCapacity: apimSkuCapacity
+    publisherEmail: apimPublisherEmail
+    publisherName: apimPublisherName
+    gatewayIdentityId: gatewayIdentity!.outputs.identityId
+    gatewayIdentityClientId: gatewayIdentity!.outputs.clientId
+    queryBackendUrl: queryFunctions!.outputs.queryBackendUrl
+    backendAudience: queryBackendAudience
+    appInsightsId: monitoring.outputs.appInsightsId
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    workspaceId: monitoring.outputs.workspaceId
+    subscriptionRequired: apimSubscriptionRequired
+    knowledgeGeneration: knowledgeGeneration
+    securityScope: securityScope
+    promptVersion: promptVersion
+    logicalModelVersion: logicalModelVersion
+    cacheTtlSeconds: cacheTtlSeconds
+    maxRequestBytes: apimMaxRequestBytes
+    maxQuestionLength: queryMaxQuestionLength
+    maxCachedResponseBytes: apimMaxCachedResponseBytes
+    backendRateLimitCalls: apimBackendRateLimitCalls
+    backendRateLimitPeriodSeconds: apimBackendRateLimitPeriodSeconds
+    backendTimeoutSeconds: apimBackendTimeoutSeconds
+  }
+}
+
 // ── Outputs ───────────────────────────────────────────────────────────────
 output functionAppName string = functionAppName
 output systemTopicName string = eventgrid.outputs.systemTopicName
@@ -195,3 +396,18 @@ output searchEndpoint string = search.outputs.searchEndpoint
 output keyVaultUrl string = keyvault.outputs.keyVaultUrl
 output keyVaultName string = keyVaultName
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
+
+// Query / APIM demo outputs. Empty strings when the switches are off, so the
+// deployment script can branch on presence without failing.
+output queryFunctionAppName string = queryDeploymentEnabled ? queryFunctions!.outputs.queryFunctionAppName : ''
+output queryBackendUrl string = queryDeploymentEnabled ? queryFunctions!.outputs.queryBackendUrl : ''
+output queryBackendAuthEnabled bool = queryDeploymentEnabled ? queryFunctions!.outputs.authEnabled : false
+output queryBackendAudience string = queryBackendAudience
+output gatewayIdentityClientId string = queryDeploymentEnabled ? gatewayIdentity!.outputs.clientId : ''
+output apimName string = apimDeploymentEnabled ? apim!.outputs.apimName : ''
+output apimGatewayUrl string = apimDeploymentEnabled ? apim!.outputs.gatewayUrl : ''
+output ragBaselineUrl string = apimDeploymentEnabled ? apim!.outputs.baselineUrl : ''
+output ragBuiltInCacheUrl string = apimDeploymentEnabled ? apim!.outputs.builtInCacheUrl : ''
+output apimSubscriptionName string = apimDeploymentEnabled ? apim!.outputs.subscriptionName : ''
+output knowledgeGenerationNamedValue string = apimDeploymentEnabled ? apim!.outputs.knowledgeGenerationNamedValue : ''
+output activeKnowledgeGeneration string = knowledgeGeneration

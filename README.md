@@ -216,6 +216,16 @@ az-document-intelligence-v2/
   📁 scripts/
   |   deploy.sh               — end-to-end deploy
   |   demo.py                 — demo driver (upload/watch/show/annotate/ask/chat/pull)
+  |   demo_apim_cache.py      — APIM baseline/built-in-cache presenter driver (openspec: add-apim-exact-cache-demo)
+  |   publish_generation.sh   — guarded knowledge-generation publication (openspec: add-apim-exact-cache-demo)
+  |
+  📁 query/                 — RAG Query Function App (Python 3.13, non-Durable)
+  |   📄 function_app.py    — internal HTTP query route (openspec: add-apim-exact-cache-demo)
+  |   📄 host.json · requirements.txt
+  |   📁 rag/
+  |       contracts.py · validation.py · normalize.py · auth.py · config.py
+  |       clients.py · retrieval.py · answer.py · telemetry.py · headers.py
+  |       service.py · route.py
   |
   📁 demo-assets/
   |   📁 docs/                — source PDFs (folder tracked, contents ignored)
@@ -224,8 +234,12 @@ az-document-intelligence-v2/
   📁 openspec/                — change proposals & specs
   |
   📁 tests/
-      📁 unit/ · 📁 integration/
+      📁 unit/ · 📁 integration/ · 📁 query/ · 📁 infra/ · 📁 scripts/
 ```
+
+See `docs/APIM-EXACT-CACHE-DEMO.md` for the APIM exact-cache demo's deployment
+parameters, one-time Entra backend registration, identities/roles, cache-key
+dimensions/TTL, generation publication, and presenter sequence.
 
 ---
 
