@@ -26,5 +26,5 @@ PyMuPDF==1.24.14
 # Data models
 pydantic==2.10.3
 
-# App Insights telemetry is handled by the Azure Functions host automatically
-# via APPLICATIONINSIGHTS_CONNECTION_STRING — no extra SDK needed.
+# Explicit Python telemetry export to Application Insights
+azure-monitor-opentelemetry==1.8.9

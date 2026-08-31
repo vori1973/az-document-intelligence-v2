@@ -10,12 +10,16 @@ All helpers emit both a structured log record (JSON) and an App Insights custom 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import contextmanager
 from typing import Any
 
-# The Azure Functions host routes all logging output to App Insights automatically
-# when APPLICATIONINSIGHTS_CONNECTION_STRING is set — no extra handler needed.
+if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+    from azure.monitor.opentelemetry import configure_azure_monitor
+
+    configure_azure_monitor(logger_name="pipeline")
+
 logger = logging.getLogger("pipeline")
 logger.setLevel(logging.INFO)
 

@@ -1,0 +1,17 @@
+# Azure Functions runtime (non-Durable — this app has no orchestrations)
+azure-functions>=2.0.0
+
+# Azure Identity — ManagedIdentityCredential (production) / DefaultAzureCredential (local dev)
+azure-identity==1.19.0
+
+# Azure OpenAI (embeddings + chat)
+openai==1.57.0
+
+# Direct Azure AI Search REST calls (matches scripts/demo.py's request shape)
+requests==2.34.2
+
+# Data models
+pydantic==2.10.3
+
+# Explicit Python telemetry export to Application Insights
+azure-monitor-opentelemetry==1.8.9

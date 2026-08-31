@@ -30,7 +30,6 @@ import os
 import sys
 import time
 
-import requests
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from openai import AzureOpenAI
@@ -46,6 +45,13 @@ API_VERSION = "2024-10-21"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_CORPUS = os.path.join(REPO_ROOT, "demo-assets", "docs")
 DEFAULT_OUTPUT = os.path.join(REPO_ROOT, "demo-assets", "output")
+
+# The embedding/retrieval/answer implementation lives in query/rag so the
+# online query Function App (openspec/changes/add-apim-exact-cache-demo) and
+# this demo script share one implementation instead of two competing copies.
+sys.path.insert(0, os.path.join(REPO_ROOT, "query"))
+from rag.answer import SYSTEM_PROMPT as _rag_system_prompt, generate_answer as _rag_generate_answer  # noqa: E402
+from rag.retrieval import embed_text as _rag_embed_text, hybrid_search as _rag_hybrid_search  # noqa: E402
 
 CRED = DefaultAzureCredential()
 
@@ -677,49 +683,26 @@ def _is_wsl() -> bool:
 
 
 def _embed(text: str) -> list[float]:
-    return _aoai().embeddings.create(model=EMBED_MODEL, input=[text]).data[0].embedding
+    return _rag_embed_text(_aoai(), EMBED_MODEL, text)
 
 
 def _retrieve(query: str, k: int = 8, only_figures: bool = False) -> list[dict]:
     """Hybrid retrieval. The index has no server-side vectorizer, so the query
     vector is computed here and passed explicitly."""
-    body = {
-        "search": query,
-        "top": k,
-        "select": "id,type,page,source_file,image_blob,text_for_embedding,document_id",
-        "vectorQueries": [
-            {"kind": "vector", "vector": _embed(query), "fields": "embedding", "k": k}
-        ],
-    }
-    if only_figures:
-        body["filter"] = "type eq 'figure'"
-    r = requests.post(
-        f"{SEARCH}/indexes/{INDEX}/docs/search?api-version=2024-07-01",
-        headers=_search_headers(), json=body, timeout=60,
+    return _rag_hybrid_search(
+        SEARCH, INDEX, _search_headers(), _embed(query),
+        search_text=query, k=k, only_figures=only_figures,
     )
-    r.raise_for_status()
-    return r.json().get("value", [])
 
 
 def _vector_scores(query: str, k: int = 5, only_figures: bool = True) -> list[dict]:
     """Pure vector search — the score is cosine similarity, so it is comparable
     across queries. Hybrid/RRF scores are not, which makes them useless for
     deciding whether anything actually matched."""
-    body = {
-        "top": k,
-        "select": "id,type,page,source_file,image_blob,text_for_embedding,document_id",
-        "vectorQueries": [
-            {"kind": "vector", "vector": _embed(query), "fields": "embedding", "k": k}
-        ],
-    }
-    if only_figures:
-        body["filter"] = "type eq 'figure'"
-    r = requests.post(
-        f"{SEARCH}/indexes/{INDEX}/docs/search?api-version=2024-07-01",
-        headers=_search_headers(), json=body, timeout=60,
+    return _rag_hybrid_search(
+        SEARCH, INDEX, _search_headers(), _embed(query),
+        search_text=None, k=k, only_figures=only_figures,
     )
-    r.raise_for_status()
-    return r.json().get("value", [])
 
 
 # Measured on this corpus: unrelated queries ("Boeing 747 tire pressure") top out
@@ -754,29 +737,14 @@ def cmd_figures(query: str) -> None:
         print(f"        {(d.get('text_for_embedding') or '')[:220]}\n")
 
 
-SYSTEM = (
-    "You answer questions about technical documents using ONLY the numbered "
-    "sources provided. Cite every claim as [n]. Sources marked [Figure] came from a "
-    "vision model reading the image — when you use one, say which page's figure it was. "
-    "If the sources do not contain the answer, say so plainly rather than guessing."
-)
+# Kept for backward-compat reference; the shared prompt lives in
+# query/rag/answer.py (SYSTEM_PROMPT) so this and the Function App answer
+# generator never drift.
+SYSTEM = _rag_system_prompt
 
 
 def _answer(question: str, hits: list[dict], history: list[dict] | None = None) -> str:
-    context = "\n\n".join(
-        f"[{i+1}] ({d['type']}, page {d['page']}, {os.path.basename(d['source_file'])})"
-        f"\n{d.get('text_for_embedding','')}"
-        for i, d in enumerate(hits)
-    )
-    messages = [{"role": "system", "content": SYSTEM}]
-    messages += history or []
-    messages.append(
-        {"role": "user", "content": f"Sources:\n{context}\n\nQuestion: {question}"}
-    )
-    resp = _aoai().chat.completions.create(
-        model=CHAT_MODEL, messages=messages, temperature=0
-    )
-    return resp.choices[0].message.content
+    return _rag_generate_answer(_aoai(), CHAT_MODEL, question, hits, history).text
 
 
 TYPE_TAGS = {
