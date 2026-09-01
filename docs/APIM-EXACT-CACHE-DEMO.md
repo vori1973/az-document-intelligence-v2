@@ -10,12 +10,33 @@ Nothing in this document has been deployed by writing it — deploying,
 registering the Entra application, and running the commands below are
 separate, explicit operator actions.
 
+For the current `dev` environment, the demo is already enabled in
+`infra/parameters/dev.bicepparam` (`deployQuery = true`, `deployApim = true`,
+`knowledgeGeneration = '1'`, and one always-ready query instance). If that
+environment has already been deployed successfully, skip the provisioning
+sections and start at [§7 Presenter sequence and expected evidence](#7-presenter-sequence-and-expected-evidence).
+
+Quick pre-flight for an already-provisioned `dev` demo:
+
+```bash
+az account show --query '{subscription:id, user:user.name}' -o table
+
+.venv/bin/python scripts/demo_apim_cache.py \
+  --gateway-url https://docintv2-dev-apim.azure-api.net \
+  --resource-group docintv2-dev-rg --apim-name docintv2-dev-apim \
+  "What does the warranty cover?"
+```
+
+If this prints two baseline responses followed by a built-in cache `MISS` and
+then `HIT`, the demo path is working and no provisioning action is needed.
+
 ---
 
 ## 1. Deployment parameters
 
-The demo is off by default. Enabling it means setting these `infra/main.bicep`
-parameters (see the commented block in `infra/parameters/dev.bicepparam`):
+For a new environment, the demo is off by default. Enabling it means setting
+these `infra/main.bicep` parameters (see the commented block in
+`infra/parameters/dev.bicepparam`):
 
 | Parameter | Default | Purpose |
 |---|---|---|
